@@ -1,0 +1,56 @@
+# ============================================================
+# docker-compose.yml — Cryptocurrency Volatility Predictor
+# ============================================================
+# Start all services:  docker-compose up --build
+# Stop all services:   docker-compose down
+# ============================================================
+
+version: "3.9"
+
+services:
+
+  # ── FastAPI Service ────────────────────────────────────────
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crypto_fastapi
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models
+    environment:
+      - MODEL_DIR=/app/models
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Flask Service ──────────────────────────────────────────
+  flask:
+    build:
+      context: .
+      dockerfile: Dockerfile.flask
+    container_name: crypto_flask
+    ports:
+      - "5000:5000"
+    environment:
+      - FASTAPI_URL=http://fastapi:8000
+      - FLASK_PORT=5000
+    depends_on:
+      - fastapi
+    restart: unless-stopped
+
+  # ── Streamlit Service ──────────────────────────────────────
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: crypto_streamlit
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./models:/app/models
+    restart: unless-stopped
