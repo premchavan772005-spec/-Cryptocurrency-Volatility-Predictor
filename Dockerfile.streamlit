@@ -21,7 +21,7 @@ RUN pip install --upgrade pip && \
     pip install streamlit
 
 COPY app.py .
-COPY models/ ./models/
+
 
 EXPOSE 8501
 
