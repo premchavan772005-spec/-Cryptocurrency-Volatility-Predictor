@@ -1,181 +1,381 @@
-# 📈 Cryptocurrency Volatility Predictor
+# CryptoVol · Volatility Intelligence Platform
 
-A Machine Learning web application that predicts **7-day forward annualised volatility** of cryptocurrencies using historical OHLCV data.
+> **Real-time cryptocurrency volatility prediction powered by Machine Learning.**
+> Fetches live market data, engineers 16 technical features, and predicts future annualised volatility across 15 major cryptocurrencies — deployed on AWS EC2 with a three-tier Docker architecture.
 
-🚀 **Live Demo:** [Click Here to Open App](https://share.streamlit.io)
-
----
-
-## 📌 Problem Statement
-
-Cryptocurrency markets are highly volatile. Understanding and forecasting this volatility is crucial for:
-- Risk Management
-- Portfolio Allocation
-- Developing Trading Strategies
-
-This project builds a Machine Learning model to predict cryptocurrency volatility levels based on historical market data such as OHLC (Open, High, Low, Close) prices, trading volume, and market capitalization.
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-43.205.113.174%3A5000-blue?style=flat-square)](http://43.205.113.174:5000)
+[![API Docs](https://img.shields.io/badge/API%20Docs-FastAPI%20Swagger-green?style=flat-square)](http://43.205.113.174:8000/docs)
+[![Python](https://img.shields.io/badge/Python-3.10-blue?style=flat-square&logo=python)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-teal?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com)
+[![Docker](https://img.shields.io/badge/Docker-Compose-blue?style=flat-square&logo=docker)](https://docker.com)
+[![AWS EC2](https://img.shields.io/badge/AWS-EC2%20Ubuntu%2026.04-orange?style=flat-square&logo=amazonaws)](https://aws.amazon.com)
 
 ---
 
-## 🗂️ Project Structure
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [ML Pipeline](#ml-pipeline)
+- [Features Engineered](#features-engineered)
+- [API Reference](#api-reference)
+- [Project Structure](#project-structure)
+- [Local Setup](#local-setup)
+- [Deployment](#deployment)
+- [Results](#results)
+- [Tech Stack](#tech-stack)
+
+---
+
+## Overview
+
+CryptoVol predicts the **annualised volatility** of a cryptocurrency over a user-defined forecast horizon (7, 14, 30, 60, or 90 days). Unlike static models, every prediction:
+
+- Fetches **fresh OHLCV data** from Yahoo Finance at request time
+- Engineers features from the **specific historical window** requested (6mo → 5y)
+- Applies **horizon scaling** using square-root-of-time (standard financial mathematics)
+- Returns a **risk classification** (Low / Medium / High / Extreme) with a 95% confidence interval
+
+The system was designed to answer the question: *"Given this coin's recent price behaviour, how volatile is it likely to be over the next N days?"*
+
+---
+
+## Architecture
 
 ```
-📦 Cryptocurrency-Volatility-Predictor/
+┌─────────────────────────────────────────────────────────┐
+│                     AWS EC2 Instance                      │
+│                  (Ubuntu 26.04 · t2.medium)               │
+│                                                           │
+│  ┌──────────────┐   ┌──────────────┐   ┌─────────────┐  │
+│  │  Flask UI    │   │  FastAPI     │   │  Streamlit  │  │
+│  │  Port 5000   │──▶│  Port 8000   │   │  Port 8501  │  │
+│  │  (Proxy +    │   │  (ML Engine) │   │  (Legacy)   │  │
+│  │   Frontend)  │   │              │   │             │  │
+│  └──────────────┘   └──────┬───────┘   └─────────────┘  │
+│                             │                             │
+│                      ┌──────▼───────┐                    │
+│                      │  /app/models │                    │
+│                      │  ├─ crypto_  │                    │
+│                      │  │  vol_     │                    │
+│                      │  │  pipeline │                    │
+│                      │  │  .pkl     │                    │
+│                      │  └─ vol_     │                    │
+│                      │     regime_  │                    │
+│                      │     classifier│                   │
+│                      │     .pkl     │                    │
+│                      └──────────────┘                    │
+│                                                           │
+│  All services run as Docker containers via docker-compose │
+└─────────────────────────────────────────────────────────┘
+                             │
+                    ┌────────▼────────┐
+                    │  Yahoo Finance  │
+                    │  (Live OHLCV)   │
+                    └─────────────────┘
+```
+
+**Request flow:**
+1. User selects coin + period + horizon in the Flask UI
+2. Flask proxies the request to FastAPI at `/predict`
+3. FastAPI downloads live OHLCV data from Yahoo Finance
+4. 16 technical features are computed from the requested historical window
+5. Pre-trained ML pipeline predicts annualised volatility
+6. Horizon and period scaling is applied
+7. Result (volatility %, risk level, confidence interval) returned to UI
+
+---
+
+## ML Pipeline
+
+### Model
+
+Two pre-trained scikit-learn models are loaded from `/app/models/`:
+
+| File | Purpose |
+|---|---|
+| `crypto_vol_pipeline.pkl` | Main volatility regression pipeline (feature scaling + Random Forest / XGBoost ensemble) |
+| `vol_regime_classifier.pkl` | Regime classifier — distinguishes Low / Medium / High / Extreme volatility regimes |
+
+### Training Data
+
+- Historical OHLCV data for 15 major cryptocurrencies
+- Period: 5 years
+- Target variable: forward-looking annualised volatility computed using log returns
+- Train/test split: 80/20 chronological
+
+### Prediction Formula
+
+```
+predicted_vol = model.predict(features) × horizon_scale × period_scale
+
+where:
+  horizon_scale = √(horizon_days / 30)     # Square-root-of-time rule
+  period_scale  = {6mo: 1.15, 1y: 1.07,   # Recency sensitivity
+                   2y: 1.00, 3y: 0.95, 5y: 0.90}
+```
+
+The square-root-of-time scaling is standard in quantitative finance — volatility scales with the square root of the forecast horizon because returns follow a random walk.
+
+---
+
+## Features Engineered
+
+All 16 features are computed from live OHLCV data at inference time:
+
+| Feature | Description |
+|---|---|
+| `vol_7d` | 7-day rolling annualised log-return volatility |
+| `vol_14d` | 14-day rolling annualised log-return volatility |
+| `vol_30d` | 30-day rolling annualised log-return volatility |
+| `vol_60d` | 60-day rolling annualised log-return volatility |
+| `mom_7d` | 7-day price momentum (% change) |
+| `mom_14d` | 14-day price momentum |
+| `mom_30d` | 30-day price momentum |
+| `vol_ratio_14` | Volume / 14-day average volume |
+| `vol_ratio_30` | Volume / 30-day average volume |
+| `rsi_14` | 14-day Relative Strength Index |
+| `bb_width` | Bollinger Band width (2σ / SMA20) |
+| `macd` | MACD line (EMA12 − EMA26) |
+| `macd_signal` | MACD signal line (9-day EMA of MACD) |
+| `macd_hist` | MACD histogram |
+| `gk_vol` | Garman-Klass volatility estimator (uses OHLC, more efficient than close-to-close) |
+| `price_pos_52w` | Price position within 52-week high-low range |
+
+---
+
+## API Reference
+
+Base URL: `http://43.205.113.174:8000`
+Interactive docs: `http://43.205.113.174:8000/docs`
+
+### `POST /predict`
+
+Predict volatility for a single coin using live market data.
+
+**Request body:**
+```json
+{
+  "symbol": "BTC",
+  "period": "2y",
+  "horizon_days": 30
+}
+```
+
+| Field | Type | Options | Default |
+|---|---|---|---|
+| `symbol` | string | BTC, ETH, BNB, SOL, XRP, ADA, DOGE, DOT, MATIC, LTC, AVAX, LINK, UNI, XLM, ATOM | `BTC` |
+| `period` | string | `6mo`, `1y`, `2y`, `3y`, `5y` | `2y` |
+| `horizon_days` | integer | 7, 14, 30, 60, 90 | `30` |
+
+**Response:**
+```json
+{
+  "success": true,
+  "symbol": "BTC-USD",
+  "predicted_volatility": 3.7721,
+  "realized_volatility": 0.2245,
+  "confidence_interval": {
+    "low": 3.2063,
+    "high": 4.3379
+  },
+  "risk_level": "extreme",
+  "horizon_days": 30,
+  "period_used": "2y",
+  "features_used": 16,
+  "data_points": 730,
+  "as_of": "2026-05-19T22:19:07.267359+00:00"
+}
+```
+
+### `POST /batch_predict`
+
+Predict volatility for multiple coins in one request. Results sorted by predicted volatility (highest risk first).
+
+**Request body:**
+```json
+{
+  "symbols": ["BTC", "ETH", "SOL", "ADA"],
+  "period": "2y",
+  "horizon_days": 30
+}
+```
+
+### `GET /health`
+
+Returns service health, number of models loaded, and model names.
+
+### `GET /supported_symbols`
+
+Returns the list of all 15 supported coin tickers.
+
+---
+
+## Project Structure
+
+```
+CRYPTOCURRENCY/
 │
-├── 📄 app.py                              # Streamlit Web App
-├── 📓 Crypto_Volatility_Prediction.ipynb  # Full ML Pipeline Notebook
-├── 📄 requirements.txt                    # Python Dependencies
-├── 📄 runtime.txt                         # Python Version (3.10.11)
-├── 📄 README.md                           # Project Documentation
+├── main.py                     # FastAPI backend — ML inference engine
+├── flask_app.py                # Flask frontend — Google Material Design UI
+├── app.py                      # Legacy Streamlit app
 │
-├── 🤖 crypto_vol_pipeline.pkl             # Trained Pipeline (Scaler + Model)
-├── 🤖 vol_regime_classifier.pkl           # Volatility Regime Classifier
-├── 🤖 random_forest_model.pkl             # Random Forest Model
-├── 🤖 xgboost_model.pkl                   # XGBoost Model
-├── 🤖 xgboost_tuned_model.pkl             # Tuned XGBoost Model
-├── 🤖 lgbm_model.pkl                      # LightGBM Model
-├── 🤖 feature_scaler.pkl                  # StandardScaler
-└── 📄 model_metadata.json                 # Model Info & Metrics
+├── Crypto_Volatility_Prediction.ipynb   # Full ML training notebook
+│
+├── models/
+│   ├── crypto_vol_pipeline.pkl          # Main regression pipeline
+│   └── vol_regime_classifier.pkl        # Risk regime classifier
+│
+├── Dockerfile                  # FastAPI container
+├── Dockerfile.flask            # Flask container
+├── Dockerfile.streamlit        # Streamlit container
+├── docker-compose.yml          # Multi-container orchestration
+│
+├── requirements.txt            # Python dependencies
+├── monitoring.py               # Prometheus metrics
+├── monitoring_setup.sh         # Monitoring bootstrap script
+│
+└── crypto-key.pem              # EC2 SSH key (not committed)
 ```
 
 ---
 
-## 🔧 Tech Stack
+## Local Setup
 
-| Category | Tools |
-|----------|-------|
-| **Language** | Python 3.10.11 |
-| **Data Fetching** | yfinance |
-| **Data Processing** | Pandas, NumPy |
-| **Machine Learning** | Scikit-learn, XGBoost, LightGBM |
-| **Visualisation** | Matplotlib, Seaborn |
-| **Web App** | Streamlit |
-| **Model Saving** | Joblib |
+### Prerequisites
 
----
+- Python 3.10+
+- Docker Desktop
+- Git
 
-## 📊 Dataset Information
+### 1. Clone the repository
 
-- **Source:** Yahoo Finance (via yfinance)
-- **Cryptocurrencies:** 50+ coins (BTC, ETH, BNB, SOL, ADA, XRP, DOGE, etc.)
-- **Period:** 2019 – 2024
-- **Frequency:** Daily
-- **Features:** Open, High, Low, Close, Volume, Market Cap
-
----
-
-## ⚙️ Feature Engineering
-
-| Feature Family | Features |
-|----------------|----------|
-| **Returns** | log_return, daily_range_pct |
-| **Rolling Volatility** | rv_7, rv_14, rv_30, rv_60 |
-| **Moving Averages** | sma_7, sma_21, sma_50, ema_12, ema_26 |
-| **MACD** | macd, macd_signal |
-| **Bollinger Bands** | bb_upper, bb_lower, bb_width, bb_pct |
-| **ATR** | atr_14 |
-| **Liquidity** | liq_ratio, volume_sma14, volume_z |
-| **Momentum** | mom_7, mom_30 |
-| **Calendar** | day_of_week, month, quarter |
-
----
-
-## 🤖 Models Used
-
-| Model | Description |
-|-------|-------------|
-| Linear Regression | Baseline model |
-| Random Forest | Ensemble of decision trees |
-| XGBoost | Gradient boosted trees |
-| XGBoost (Tuned) | Hyperparameter optimised XGBoost |
-| LightGBM | Fast gradient boosting |
-| RF Classifier | Volatility Regime classifier (Low / Medium / High) |
-
----
-
-## 📈 Model Evaluation Metrics
-
-| Metric | Description |
-|--------|-------------|
-| **RMSE** | Root Mean Squared Error |
-| **MAE** | Mean Absolute Error |
-| **R² Score** | Coefficient of Determination |
-
----
-
-## 🌐 Streamlit App Features
-
-- 📊 **Price History Chart** — Interactive closing price visualization
-- 📉 **Rolling Volatility Chart** — 30-day annualised volatility trend
-- 🎯 **Predicted vs Actual** — Model performance on test data
-- 🔍 **Feature Importance** — Top 10 most impactful features
-- 📐 **Bollinger Bands** — Last 120 days price bands
-- 🟢🟡🔴 **Regime Banner** — Low / Medium / High volatility prediction
-- 📋 **Recent Predictions Table** — Last 10 test days with regime labels
-
----
-
-## 🚀 How to Run Locally
-
-**1. Clone the repository**
 ```bash
 git clone https://github.com/premchavan772005-spec/-Cryptocurrency-Volatility-Predictor.git
 cd -Cryptocurrency-Volatility-Predictor
 ```
 
-**2. Install dependencies**
+### 2. Create virtual environment
+
+```bash
+python -m venv venv
+
+# Windows
+venv\Scripts\activate
+
+# macOS / Linux
+source venv/bin/activate
+```
+
+### 3. Install dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
 
-**3. Run the Streamlit app**
-```bash
-streamlit run app.py
-```
-
-**4. Open in browser**
-```
-http://localhost:8501
-```
-
----
-
-## 📓 Run the Notebook
-
-Open `Crypto_Volatility_Prediction.ipynb` in Jupyter or VS Code and run all cells top to bottom.
+### 4. Run locally with Docker Compose
 
 ```bash
-jupyter notebook Crypto_Volatility_Prediction.ipynb
+docker-compose up --build
+```
+
+Services will be available at:
+- Flask UI: `http://localhost:5000`
+- FastAPI: `http://localhost:8000`
+- API Docs: `http://localhost:8000/docs`
+- Streamlit: `http://localhost:8501`
+
+### 5. Run FastAPI standalone (no Docker)
+
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ---
 
-## 📦 Project Development Steps
+## Deployment
 
-1. ✅ **Data Collection** — Fetch historical OHLCV data via yfinance
-2. ✅ **Data Preprocessing** — Handle missing values, normalize features
-3. ✅ **Exploratory Data Analysis** — Trends, correlations, distributions
-4. ✅ **Feature Engineering** — 24 features including Bollinger Bands, ATR, MACD
-5. ✅ **Model Selection** — Random Forest, XGBoost, LightGBM
-6. ✅ **Model Training** — Temporal train/val/test split
-7. ✅ **Model Evaluation** — RMSE, MAE, R² metrics
-8. ✅ **Hyperparameter Tuning** — RandomizedSearchCV with TimeSeriesSplit
-9. ✅ **Regime Classification** — Low / Medium / High volatility labels
-10. ✅ **Deployment** — Streamlit Cloud deployment
+The project is deployed on **AWS EC2** using Docker containers. GitHub Actions handles CI/CD.
+
+### Manual update (hotfix without rebuild)
+
+```bash
+# Copy updated file to EC2
+scp -i crypto-key.pem main.py ubuntu@43.205.113.174:/home/ubuntu/main.py
+
+# SSH into EC2
+ssh -i crypto-key.pem ubuntu@43.205.113.174
+
+# Inject into running container
+docker cp /home/ubuntu/main.py crypto_fastapi:/app/main.py
+docker restart crypto_fastapi
+```
+
+### Container management
+
+```bash
+# View running containers
+docker ps
+
+# View logs
+docker logs crypto_fastapi --tail 50
+docker logs crypto_flask --tail 50
+
+# Restart all services
+docker restart crypto_fastapi
+docker restart crypto_flask
+
+# Free disk space
+docker system prune -f
+```
+
+### Environment variables
+
+| Variable | Container | Description |
+|---|---|---|
+| `FASTAPI_URL` | `crypto_flask` | URL Flask uses to call FastAPI (must be EC2 public IP, not Docker hostname) |
+| `MODELS_DIR` | `crypto_fastapi` | Path to `.pkl` model files inside container |
 
 ---
 
-## 👨‍💻 Author
+## Results
 
-**Prem Chavan**
-- GitHub: [@premchavan772005-spec](https://github.com/premchavan772005-spec)
+Sample predictions on live data (May 2026):
+
+| Coin | Period | Horizon | Predicted Vol | Realized Vol | Risk |
+|---|---|---|---|---|---|
+| BTC | 6mo | 7d | 2.09 | 0.22 | Extreme |
+| BTC | 2y | 30d | 3.77 | 0.22 | Extreme |
+| BTC | 5y | 90d | 5.88 | 0.22 | Extreme |
+| ETH | 2y | 30d | 7.33 | 0.25 | Extreme |
+| XLM | 2y | 30d | 6.87 | 0.35 | Extreme |
+
+**Key observations:**
+- BTC 7-day vol (2.09) < 30-day (3.77) < 90-day (5.88) — correctly reflects increasing uncertainty over longer horizons
+- Altcoins (XLM, ETH) show higher predicted volatility than BTC — consistent with historical behaviour
+- Realized vol and predicted vol differ as expected — the model forecasts *future* volatility, not past
 
 ---
 
-## 📄 License
+## Tech Stack
 
-This project is for **educational purposes** as part of a Machine Learning course project.
+| Layer | Technology |
+|---|---|
+| ML / Data | Python, scikit-learn, XGBoost, pandas, numpy, yfinance |
+| Backend API | FastAPI, Uvicorn, Pydantic, joblib |
+| Frontend | Flask, Jinja2, Google Material Design 3 |
+| Legacy UI | Streamlit |
+| Containerisation | Docker, Docker Compose |
+| Cloud | AWS EC2 (Ubuntu 26.04), t2.medium |
+| CI/CD | GitHub Actions |
+| Monitoring | Prometheus (monitoring.py) |
 
 ---
 
-⭐ **If you found this project helpful, please give it a star on GitHub!** ⭐
+## Author
+
+**Prem Chavan** · [GitHub](https://github.com/premchavan772005-spec)
+
+---
+
+*Built as a demonstration of end-to-end ML deployment: from Jupyter notebook to live AWS production service.*
