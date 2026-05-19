@@ -1,893 +1,901 @@
 """
-CryptoVol – Cryptocurrency Volatility Prediction Dashboard
-Production Flask Application  |  Google-grade UI
+CryptoVol — Cryptocurrency Volatility Intelligence Platform
+Google-grade production Flask app | Impresses interviewers
 """
 
-import os
-import requests
+import os, time, requests
 from flask import Flask, render_template_string, jsonify, request
 
 app = Flask(__name__)
 
-# ── Configuration ────────────────────────────────────────────────────────────
-FASTAPI_URL = os.getenv("FASTAPI_URL", "http://43.205.113.174:8000")
+# ── Config — reads env var set by docker-compose / EC2 ───────────────────────
+FASTAPI_URL = os.getenv("FASTAPI_URL", "http://43.205.113.174:8000").rstrip("/")
 PORT        = int(os.getenv("FLASK_PORT", 5000))
 
-SUPPORTED_SYMBOLS = [
-    "BTC-USD", "ETH-USD", "BNB-USD", "ADA-USD", "XRP-USD",
-    "SOL-USD", "DOGE-USD", "DOT-USD", "MATIC-USD", "LTC-USD",
-    "AVAX-USD", "LINK-USD", "ATOM-USD", "UNI-USD", "XLM-USD",
-    "ALGO-USD", "VET-USD", "FIL-USD", "TRX-USD", "ETC-USD",
+COINS = [
+    "BTC-USD","ETH-USD","BNB-USD","SOL-USD","ADA-USD","XRP-USD",
+    "DOGE-USD","DOT-USD","MATIC-USD","LTC-USD","AVAX-USD","LINK-USD",
+    "ATOM-USD","UNI-USD","XLM-USD","ALGO-USD","VET-USD","FIL-USD",
+    "TRX-USD","ETC-USD","NEAR-USD","FTM-USD","SAND-USD","MANA-USD",
 ]
 
-# ── HTML Template ─────────────────────────────────────────────────────────────
-HTML = r"""
-<!DOCTYPE html>
+# ════════════════════════════════════════════════════════════════════════════════
+#  HTML  ─  single-file, zero build-step, production-grade
+# ════════════════════════════════════════════════════════════════════════════════
+PAGE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>CryptoVol · Volatility Intelligence</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Google+Sans+Mono&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet"/>
-  <style>
-    /* ── Design Tokens ─────────────────────────────────── */
-    :root {
-      --bg:           #f8f9fa;
-      --surface:      #ffffff;
-      --surface-2:    #f1f3f4;
-      --border:       #dadce0;
-      --text-primary: #202124;
-      --text-secondary:#5f6368;
-      --text-hint:    #80868b;
-      --blue:         #1a73e8;
-      --blue-hover:   #1557b0;
-      --blue-light:   #e8f0fe;
-      --green:        #1e8e3e;
-      --green-light:  #e6f4ea;
-      --yellow:       #f9ab00;
-      --yellow-light: #fef7e0;
-      --red:          #d93025;
-      --red-light:    #fce8e6;
-      --shadow-1:     0 1px 2px rgba(60,64,67,.3),0 1px 3px 1px rgba(60,64,67,.15);
-      --shadow-2:     0 1px 3px rgba(60,64,67,.3),0 4px 8px 3px rgba(60,64,67,.15);
-      --shadow-3:     0 2px 6px rgba(60,64,67,.3),0 6px 12px 4px rgba(60,64,67,.15);
-      --radius:       8px;
-      --radius-lg:    16px;
-      --font:         'Google Sans', 'Roboto', sans-serif;
-      --font-mono:    'Google Sans Mono', 'Roboto Mono', monospace;
-    }
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>CryptoVol · Volatility Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,700;1,9..40,300&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+/* ── Reset & tokens ─────────────────────────────────────────────────────── */
+*,::before,::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --ink:       #0d1117;
+  --ink-2:     #24292f;
+  --ink-3:     #57606a;
+  --ink-4:     #8c959f;
+  --canvas:    #ffffff;
+  --surface:   #f6f8fa;
+  --border:    #d0d7de;
+  --border-2:  #e6eaef;
+  --blue:      #0969da;
+  --blue-bg:   #ddf4ff;
+  --blue-dark: #0550ae;
+  --green:     #1a7f37;
+  --green-bg:  #dafbe1;
+  --amber:     #9a6700;
+  --amber-bg:  #fff8c5;
+  --red:       #cf222e;
+  --red-bg:    #ffebe9;
+  --shadow-sm: 0 1px 0 rgba(31,35,40,.04);
+  --shadow-md: 0 3px 6px rgba(140,149,159,.15);
+  --shadow-lg: 0 8px 24px rgba(140,149,159,.20);
+  --radius:    6px;
+  --radius-lg: 12px;
+  --font:      'DM Sans', system-ui, sans-serif;
+  --mono:      'DM Mono', 'Fira Code', monospace;
+}
+html{font-size:14px;-webkit-font-smoothing:antialiased}
+body{font-family:var(--font);background:var(--surface);color:var(--ink);min-height:100vh;line-height:1.6}
 
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+/* ── Scrollbar ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 
-    body {
-      font-family: var(--font);
-      background: var(--bg);
-      color: var(--text-primary);
-      min-height: 100vh;
-      font-size: 14px;
-      line-height: 1.5;
-    }
+/* ── Top Bar ────────────────────────────────────────────────────────────── */
+.topbar{
+  position:sticky;top:0;z-index:200;
+  height:56px;
+  background:var(--ink);
+  display:flex;align-items:center;gap:0;
+  border-bottom:1px solid rgba(255,255,255,.06);
+}
+.topbar-logo{
+  display:flex;align-items:center;gap:10px;
+  padding:0 20px;height:100%;
+  border-right:1px solid rgba(255,255,255,.08);
+  text-decoration:none;
+  color:#fff;font-weight:600;font-size:15px;letter-spacing:-.2px;
+  white-space:nowrap;
+}
+.topbar-logo-icon{
+  width:28px;height:28px;border-radius:6px;
+  background:linear-gradient(135deg,#2563eb,#06b6d4);
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.topbar-nav{display:flex;align-items:center;height:100%;gap:2px;padding:0 12px;flex:1}
+.topbar-tab{
+  display:flex;align-items:center;gap:6px;
+  height:36px;padding:0 14px;border-radius:var(--radius);
+  color:rgba(255,255,255,.55);font-size:13px;font-weight:500;
+  cursor:pointer;transition:background .12s,color .12s;border:none;background:none;
+  white-space:nowrap;
+}
+.topbar-tab:hover{background:rgba(255,255,255,.07);color:rgba(255,255,255,.85)}
+.topbar-tab.active{background:rgba(255,255,255,.1);color:#fff}
+.topbar-tab svg{opacity:.7;flex-shrink:0}
+.topbar-tab.active svg{opacity:1}
+.topbar-end{display:flex;align-items:center;gap:8px;padding:0 16px;margin-left:auto}
+.status-badge{
+  display:flex;align-items:center;gap:6px;
+  padding:5px 12px;border-radius:20px;
+  font-size:12px;font-weight:500;
+  border:1px solid rgba(255,255,255,.12);
+  color:rgba(255,255,255,.6);
+}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--ink-4);flex-shrink:0}
+.status-badge.live{border-color:rgba(26,127,55,.4);color:#3fb950;background:rgba(26,127,55,.1)}
+.status-badge.live .status-dot{background:#3fb950;box-shadow:0 0 0 2px rgba(63,185,80,.25)}
+.status-badge.down{border-color:rgba(207,34,46,.4);color:#f85149;background:rgba(207,34,46,.1)}
+.status-badge.down .status-dot{background:#f85149}
 
-    /* ── App Shell ─────────────────────────────────────── */
-    .app-bar {
-      position: sticky; top: 0; z-index: 100;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      padding: 0 24px;
-      height: 64px;
-      display: flex; align-items: center; gap: 16px;
-    }
-    .app-bar-logo {
-      display: flex; align-items: center; gap: 10px;
-      font-size: 18px; font-weight: 500; color: var(--text-primary);
-      text-decoration: none;
-    }
-    .app-bar-logo svg { flex-shrink: 0; }
-    .app-bar-divider { color: var(--border); font-size: 22px; font-weight: 200; }
-    .app-bar-subtitle { font-size: 13px; color: var(--text-secondary); font-weight: 400; }
-    .app-bar-spacer { flex: 1; }
-    .status-pill {
-      display: flex; align-items: center; gap: 6px;
-      padding: 6px 12px; border-radius: 20px;
-      font-size: 12px; font-weight: 500;
-      border: 1px solid var(--border);
-    }
-    .status-dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: var(--text-hint);
-    }
-    .status-pill.online .status-dot { background: var(--green); }
-    .status-pill.online { border-color: var(--green); color: var(--green); background: var(--green-light); }
-    .status-pill.offline .status-dot { background: var(--red); }
-    .status-pill.offline { border-color: var(--red); color: var(--red); background: var(--red-light); }
+/* ── Layout ─────────────────────────────────────────────────────────────── */
+.layout{display:flex;min-height:calc(100vh - 56px)}
+.sidebar{
+  width:220px;flex-shrink:0;
+  background:var(--canvas);
+  border-right:1px solid var(--border);
+  padding:16px 0;
+  position:sticky;top:56px;height:calc(100vh - 56px);overflow-y:auto;
+}
+.sidebar-group-title{
+  padding:8px 16px 4px;
+  font-size:11px;font-weight:600;letter-spacing:.6px;
+  color:var(--ink-4);text-transform:uppercase;
+}
+.sidebar-item{
+  display:flex;align-items:center;gap:10px;
+  margin:2px 8px;padding:8px 10px;border-radius:var(--radius);
+  font-size:13px;font-weight:500;color:var(--ink-3);
+  cursor:pointer;transition:background .1s,color .1s;
+}
+.sidebar-item:hover{background:var(--surface);color:var(--ink-2)}
+.sidebar-item.active{background:var(--blue-bg);color:var(--blue);font-weight:600}
+.sidebar-item svg{flex-shrink:0;opacity:.7}
+.sidebar-item.active svg{opacity:1}
+.sidebar-sep{height:1px;background:var(--border-2);margin:12px 0}
 
-    /* ── Layout ────────────────────────────────────────── */
-    .layout {
-      display: grid;
-      grid-template-columns: 240px 1fr;
-      min-height: calc(100vh - 64px);
-    }
-    .sidebar {
-      border-right: 1px solid var(--border);
-      background: var(--surface);
-      padding: 16px 0;
-      position: sticky; top: 64px; height: calc(100vh - 64px); overflow-y: auto;
-    }
-    .nav-section-title {
-      padding: 8px 16px 4px;
-      font-size: 11px; font-weight: 500;
-      color: var(--text-hint);
-      letter-spacing: .8px; text-transform: uppercase;
-    }
-    .nav-item {
-      display: flex; align-items: center; gap: 12px;
-      padding: 10px 16px; cursor: pointer;
-      font-size: 14px; color: var(--text-secondary);
-      border-radius: 0 20px 20px 0; margin-right: 12px;
-      transition: background .15s, color .15s;
-    }
-    .nav-item:hover { background: var(--surface-2); color: var(--text-primary); }
-    .nav-item.active {
-      background: var(--blue-light); color: var(--blue); font-weight: 500;
-    }
-    .nav-item svg { flex-shrink: 0; }
+.content{flex:1;padding:28px 32px;max-width:1060px;overflow-y:auto}
 
-    /* ── Main Content ──────────────────────────────────── */
-    .main { padding: 24px; max-width: 1100px; }
+/* ── Page header ────────────────────────────────────────────────────────── */
+.page-head{margin-bottom:24px}
+.page-title{font-size:20px;font-weight:600;color:var(--ink);letter-spacing:-.3px}
+.page-desc{font-size:13px;color:var(--ink-3);margin-top:2px;font-weight:300}
 
-    /* ── Page Header ───────────────────────────────────── */
-    .page-header { margin-bottom: 24px; }
-    .page-title { font-size: 22px; font-weight: 400; color: var(--text-primary); }
-    .page-subtitle { font-size: 14px; color: var(--text-secondary); margin-top: 2px; }
+/* ── Stat strip ─────────────────────────────────────────────────────────── */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
+.stat{
+  background:var(--canvas);border:1px solid var(--border);
+  border-radius:var(--radius-lg);padding:16px 18px;
+}
+.stat-label{font-size:11px;font-weight:600;color:var(--ink-4);letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px}
+.stat-val{font-size:24px;font-weight:300;color:var(--ink);letter-spacing:-.5px;line-height:1;font-variant-numeric:tabular-nums}
+.stat-note{font-size:11px;color:var(--ink-4);margin-top:4px}
+.stat.accent-blue{border-top:3px solid var(--blue)}
+.stat.accent-green{border-top:3px solid var(--green)}
+.stat.accent-amber{border-top:3px solid #e5b430}
+.stat.accent-dynamic{border-top:3px solid var(--ink-3)}
 
-    /* ── Cards ─────────────────────────────────────────── */
-    .card {
-      background: var(--surface);
-      border-radius: var(--radius-lg);
-      border: 1px solid var(--border);
-      margin-bottom: 16px;
-      overflow: hidden;
-    }
-    .card-header {
-      padding: 20px 24px 0;
-      display: flex; align-items: center; justify-content: space-between;
-    }
-    .card-title {
-      font-size: 16px; font-weight: 500; color: var(--text-primary);
-      display: flex; align-items: center; gap: 8px;
-    }
-    .card-body { padding: 20px 24px 24px; }
+/* ── Card ───────────────────────────────────────────────────────────────── */
+.card{
+  background:var(--canvas);border:1px solid var(--border);
+  border-radius:var(--radius-lg);overflow:hidden;margin-bottom:16px;
+}
+.card-head{
+  padding:18px 22px 0;
+  display:flex;align-items:flex-start;justify-content:space-between;
+}
+.card-title{font-size:14px;font-weight:600;color:var(--ink);display:flex;align-items:center;gap:8px}
+.card-title svg{color:var(--ink-3)}
+.card-body{padding:18px 22px 22px}
 
-    /* ── Metric Row ────────────────────────────────────── */
-    .metric-grid {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 12px; margin-bottom: 24px;
-    }
-    .metric-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      padding: 20px;
-    }
-    .metric-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; margin-bottom: 8px; }
-    .metric-value { font-size: 28px; font-weight: 400; color: var(--text-primary); line-height: 1; }
-    .metric-sub { font-size: 12px; color: var(--text-hint); margin-top: 4px; }
-    .metric-card.blue { border-left: 3px solid var(--blue); }
-    .metric-card.green { border-left: 3px solid var(--green); }
-    .metric-card.yellow { border-left: 3px solid var(--yellow); }
-    .metric-card.red { border-left: 3px solid var(--red); }
+/* ── Form controls ──────────────────────────────────────────────────────── */
+.fields{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:18px}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-size:11px;font-weight:600;color:var(--ink-3);text-transform:uppercase;letter-spacing:.5px}
+.field select,.field input{
+  height:38px;padding:0 10px;
+  border:1px solid var(--border);border-radius:var(--radius);
+  font-family:var(--font);font-size:13px;color:var(--ink);
+  background:var(--canvas);outline:none;
+  transition:border-color .15s,box-shadow .15s;
+}
+.field select{
+  padding-right:28px;appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%238c959f' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 8px center;
+}
+.field select:focus,.field input:focus{
+  border-color:var(--blue);box-shadow:0 0 0 3px rgba(9,105,218,.15);
+}
 
-    /* ── Form Controls ─────────────────────────────────── */
-    .form-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 20px; }
-    .form-group { display: flex; flex-direction: column; gap: 6px; min-width: 180px; }
-    .form-label { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
-    .form-select, .form-input {
-      height: 40px; padding: 0 12px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      font-family: var(--font); font-size: 14px; color: var(--text-primary);
-      background: var(--surface);
-      outline: none; appearance: none;
-      transition: border-color .15s, box-shadow .15s;
-    }
-    .form-select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'%3E%3Cpath fill='%235f6368' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 8px center; padding-right: 32px; }
-    .form-select:focus, .form-input:focus { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(26,115,232,.2); }
+/* ── Buttons ────────────────────────────────────────────────────────────── */
+.btn{
+  display:inline-flex;align-items:center;gap:7px;
+  height:38px;padding:0 20px;border:none;border-radius:var(--radius);
+  font-family:var(--font);font-size:13px;font-weight:600;
+  cursor:pointer;transition:all .15s;white-space:nowrap;
+}
+.btn-primary{background:var(--blue);color:#fff}
+.btn-primary:hover:not(:disabled){background:var(--blue-dark);box-shadow:var(--shadow-md)}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.btn-ghost{background:var(--surface);color:var(--ink-2);border:1px solid var(--border)}
+.btn-ghost:hover{background:var(--border-2)}
+.btn-sm{height:30px;padding:0 12px;font-size:12px}
+.spin{
+  width:14px;height:14px;border:2px solid rgba(255,255,255,.3);
+  border-top-color:#fff;border-radius:50%;
+  animation:spin .6s linear infinite;display:none;flex-shrink:0;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
 
-    /* ── Buttons ───────────────────────────────────────── */
-    .btn {
-      display: inline-flex; align-items: center; gap: 8px;
-      height: 40px; padding: 0 24px;
-      border: none; border-radius: 20px; cursor: pointer;
-      font-family: var(--font); font-size: 14px; font-weight: 500;
-      transition: box-shadow .15s, background .15s; white-space: nowrap;
-    }
-    .btn-primary { background: var(--blue); color: #fff; }
-    .btn-primary:hover { background: var(--blue-hover); box-shadow: var(--shadow-1); }
-    .btn-primary:disabled { background: var(--border); color: var(--text-hint); cursor: not-allowed; box-shadow: none; }
-    .btn-outlined {
-      background: transparent; color: var(--blue);
-      border: 1px solid var(--blue);
-    }
-    .btn-outlined:hover { background: var(--blue-light); }
+/* ── Progress bar ───────────────────────────────────────────────────────── */
+.prog{height:3px;background:var(--border-2);border-radius:2px;display:none;overflow:hidden;margin-bottom:16px}
+.prog-fill{height:100%;width:40%;background:linear-gradient(90deg,var(--blue),#06b6d4);border-radius:2px;animation:prog 1.4s ease-in-out infinite}
+@keyframes prog{0%{margin-left:-40%}100%{margin-left:110%}}
+.prog.on{display:block}
 
-    /* ── Loading Spinner ───────────────────────────────── */
-    .spinner {
-      width: 20px; height: 20px; border: 2px solid rgba(255,255,255,.3);
-      border-top-color: #fff; border-radius: 50%;
-      animation: spin .7s linear infinite; display: none;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
+/* ── Error banner ───────────────────────────────────────────────────────── */
+.err{
+  display:none;align-items:flex-start;gap:10px;
+  padding:12px 14px;border-radius:var(--radius);
+  background:var(--red-bg);border:1px solid rgba(207,34,46,.2);
+  color:var(--red);font-size:13px;margin-bottom:16px;
+}
+.err.on{display:flex}
+.err-icon{flex-shrink:0;margin-top:1px}
 
-    /* ── Result Panel ──────────────────────────────────── */
-    .result-panel {
-      display: none;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      overflow: hidden; margin-top: 20px;
-    }
-    .result-panel.visible { display: block; }
-    .result-header {
-      padding: 16px 20px;
-      background: var(--surface-2);
-      border-bottom: 1px solid var(--border);
-      display: flex; align-items: center; justify-content: space-between;
-    }
-    .result-title { font-size: 14px; font-weight: 500; }
-    .result-body { padding: 20px; }
+/* ── Result box ─────────────────────────────────────────────────────────── */
+.result-box{
+  display:none;border:1px solid var(--border);
+  border-radius:var(--radius-lg);overflow:hidden;
+}
+.result-box.on{display:block}
+.result-top{
+  padding:14px 18px;
+  background:var(--surface);
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.result-label{font-size:12px;font-weight:600;color:var(--ink-3);letter-spacing:.3px}
+.result-ts{font-size:11px;color:var(--ink-4)}
+.result-body{padding:22px 18px;display:flex;align-items:center;gap:40px;flex-wrap:wrap}
+.vol-big{font-size:52px;font-weight:200;color:var(--ink);line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-2px}
+.vol-pct{font-size:20px;color:var(--ink-3);align-self:flex-end;margin-bottom:6px;font-weight:300}
+.vol-detail{display:flex;flex-direction:column;gap:10px}
+.regime-chip{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:5px 14px;border-radius:20px;
+  font-size:13px;font-weight:600;
+}
+.chip-low   {background:var(--green-bg);color:var(--green)}
+.chip-medium{background:var(--amber-bg);color:var(--amber)}
+.chip-high  {background:var(--red-bg);  color:var(--red)}
+.vol-meta{font-size:12px;color:var(--ink-4)}
 
-    /* ── Volatility Display ────────────────────────────── */
-    .vol-display {
-      display: flex; align-items: center; gap: 32px; flex-wrap: wrap;
-    }
-    .vol-number { font-size: 48px; font-weight: 300; line-height: 1; font-variant-numeric: tabular-nums; }
-    .vol-unit { font-size: 18px; color: var(--text-secondary); align-self: flex-end; margin-bottom: 8px; }
-    .vol-meta { display: flex; flex-direction: column; gap: 8px; }
-    .vol-badge {
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 6px 14px; border-radius: 20px;
-      font-size: 13px; font-weight: 500;
-    }
-    .badge-low    { background: var(--green-light);  color: var(--green); }
-    .badge-medium { background: var(--yellow-light); color: #c77400; }
-    .badge-high   { background: var(--red-light);    color: var(--red); }
-    .vol-coin { font-size: 14px; color: var(--text-secondary); }
-    .vol-latency { font-size: 12px; color: var(--text-hint); }
+/* ── Chip selector ──────────────────────────────────────────────────────── */
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px}
+.coin-chip{
+  display:inline-flex;align-items:center;
+  padding:5px 13px;border-radius:20px;
+  border:1px solid var(--border);background:var(--canvas);
+  color:var(--ink-3);font-size:12px;font-weight:600;
+  cursor:pointer;transition:all .12s;user-select:none;
+  font-family:var(--mono);
+}
+.coin-chip:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-bg)}
+.coin-chip.sel{background:var(--ink);color:#fff;border-color:var(--ink)}
+.chip-actions{display:flex;gap:6px;margin-bottom:14px}
 
-    /* ── Chip Group (coin selector) ────────────────────── */
-    .chip-group { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
-    .chip {
-      display: inline-flex; align-items: center; gap: 4px;
-      padding: 6px 14px; border-radius: 20px;
-      border: 1px solid var(--border);
-      background: var(--surface); color: var(--text-primary);
-      font-size: 13px; font-weight: 500; cursor: pointer;
-      transition: all .15s; user-select: none;
-    }
-    .chip:hover { background: var(--surface-2); border-color: #bdc1c6; }
-    .chip.selected {
-      background: var(--blue-light); color: var(--blue);
-      border-color: var(--blue);
-    }
+/* ── Data table ─────────────────────────────────────────────────────────── */
+.data-table{width:100%;border-collapse:collapse}
+.data-table thead tr{background:var(--surface)}
+.data-table th{
+  text-align:left;padding:10px 14px;
+  font-size:11px;font-weight:600;color:var(--ink-4);
+  text-transform:uppercase;letter-spacing:.5px;
+  border-bottom:1px solid var(--border);
+}
+.data-table td{
+  padding:12px 14px;font-size:13px;
+  border-bottom:1px solid var(--border-2);
+  vertical-align:middle;
+}
+.data-table tbody tr:last-child td{border-bottom:none}
+.data-table tbody tr:hover td{background:var(--surface)}
+.coin-name{font-family:var(--mono);font-weight:500;color:var(--ink)}
+.vol-cell{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.bar-wrap{display:flex;align-items:center;gap:8px}
+.bar-track{height:6px;background:var(--border-2);border-radius:3px;flex:1;overflow:hidden}
+.bar-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--blue),#06b6d4);transition:width .3s ease}
+.rank-badge{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:22px;height:22px;border-radius:50%;
+  font-size:11px;font-weight:700;
+}
+.rank-1{background:#ffd700;color:#7a6200}
+.rank-2{background:#c0c0c0;color:#444}
+.rank-3{background:#cd7f32;color:#6b3a00}
+.rank-n{background:var(--surface);color:var(--ink-4)}
 
-    /* ── Batch Results Table ───────────────────────────── */
-    .results-table { width: 100%; border-collapse: collapse; }
-    .results-table th {
-      text-align: left; padding: 10px 16px;
-      font-size: 12px; font-weight: 500; color: var(--text-secondary);
-      border-bottom: 1px solid var(--border);
-      background: var(--surface-2);
-    }
-    .results-table td {
-      padding: 12px 16px; font-size: 14px;
-      border-bottom: 1px solid var(--border);
-      vertical-align: middle;
-    }
-    .results-table tr:last-child td { border-bottom: none; }
-    .results-table tr:hover td { background: var(--surface-2); }
-    .vol-bar-wrap { display: flex; align-items: center; gap: 8px; }
-    .vol-bar {
-      height: 4px; border-radius: 2px;
-      background: var(--blue); flex-shrink: 0;
-      min-width: 4px;
-    }
+/* ── Health cards ───────────────────────────────────────────────────────── */
+.health-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.health-card{
+  border:1px solid var(--border);border-radius:var(--radius-lg);
+  padding:16px;
+}
+.health-card-title{font-size:12px;font-weight:600;color:var(--ink-3);margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px}
+.health-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border-2);font-size:12px}
+.health-row:last-child{border-bottom:none}
+.health-key{color:var(--ink-3)}
+.health-val{font-family:var(--mono);color:var(--ink-2);font-size:11px}
+.online-tag{display:inline-flex;align-items:center;gap:4px;color:var(--green);font-weight:600;font-size:12px}
+.online-dot{width:6px;height:6px;border-radius:50%;background:var(--green)}
 
-    /* ── Toast ─────────────────────────────────────────── */
-    .toast-container {
-      position: fixed; bottom: 24px; left: 50%;
-      transform: translateX(-50%); z-index: 1000;
-      display: flex; flex-direction: column; gap: 8px; pointer-events: none;
-    }
-    .toast {
-      padding: 12px 20px; border-radius: var(--radius);
-      background: #3c4043; color: #fff;
-      font-size: 14px; box-shadow: var(--shadow-2);
-      animation: slideUp .2s ease; pointer-events: auto;
-    }
-    .toast.error { background: var(--red); }
-    @keyframes slideUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+/* ── Toast ──────────────────────────────────────────────────────────────── */
+.toasts{position:fixed;bottom:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{
+  padding:12px 18px;border-radius:var(--radius);background:var(--ink-2);color:#fff;
+  font-size:13px;box-shadow:var(--shadow-lg);pointer-events:auto;
+  animation:slideIn .2s ease;max-width:320px;
+}
+.toast.err{background:var(--red)}
+@keyframes slideIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 
-    /* ── Empty State ───────────────────────────────────── */
-    .empty-state {
-      text-align: center; padding: 48px 20px; color: var(--text-hint);
-    }
-    .empty-state svg { opacity: .4; margin-bottom: 12px; }
-    .empty-state p { font-size: 14px; }
+/* ── API endpoint list ──────────────────────────────────────────────────── */
+.endpoint-list{display:flex;flex-direction:column;gap:2px}
+.endpoint-row{
+  display:flex;align-items:center;gap:12px;
+  padding:10px 12px;border-radius:var(--radius);
+  transition:background .1s;cursor:default;
+}
+.endpoint-row:hover{background:var(--surface)}
+.method{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:46px;height:22px;border-radius:4px;
+  font-size:11px;font-weight:700;font-family:var(--mono);flex-shrink:0;
+}
+.get {background:#ddf4ff;color:#0969da}
+.post{background:#dafbe1;color:#1a7f37}
+.ep-path{font-family:var(--mono);font-size:13px;color:var(--ink-2);flex:1}
+.ep-desc{font-size:12px;color:var(--ink-4)}
 
-    /* ── Error Banner ──────────────────────────────────── */
-    .error-banner {
-      display: flex; align-items: center; gap: 10px;
-      padding: 12px 16px; border-radius: var(--radius);
-      background: var(--red-light); color: var(--red);
-      font-size: 13px; margin-top: 12px; display: none;
-    }
-    .error-banner.visible { display: flex; }
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+@media(max-width:768px){
+  .sidebar{display:none}.stats{grid-template-columns:repeat(2,1fr)}
+  .health-grid{grid-template-columns:1fr}.topbar-nav{display:none}
+}
 
-    /* ── Progress Bar ──────────────────────────────────── */
-    .progress-bar {
-      height: 4px; background: var(--border); border-radius: 2px;
-      overflow: hidden; margin-bottom: 20px; display: none;
-    }
-    .progress-fill {
-      height: 100%; background: var(--blue);
-      border-radius: 2px; animation: progress 1.5s ease-in-out infinite;
-      width: 30%;
-    }
-    @keyframes progress {
-      0%  { margin-left: -30%; width: 30%; }
-      50% { width: 50%; }
-      100%{ margin-left: 100%; width: 30%; }
-    }
-    .progress-bar.active { display: block; }
-
-    /* ── Divider ───────────────────────────────────────── */
-    .divider { height: 1px; background: var(--border); margin: 0 -24px; }
-
-    /* ── API Info ──────────────────────────────────────── */
-    .info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
-    .info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
-    .info-row:last-child { border-bottom: none; }
-    .info-key { color: var(--text-secondary); }
-    .info-val { font-family: var(--font-mono); color: var(--text-primary); }
-
-    @media (max-width: 768px) {
-      .layout { grid-template-columns: 1fr; }
-      .sidebar { display: none; }
-      .metric-grid { grid-template-columns: repeat(2, 1fr); }
-      .info-grid { grid-template-columns: 1fr; }
-    }
-  </style>
+/* ── Fade-in ────────────────────────────────────────────────────────────── */
+.fade{animation:fade .25s ease}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+</style>
 </head>
 <body>
 
-<!-- App Bar -->
-<header class="app-bar">
-  <a class="app-bar-logo" href="/">
-    <svg width="32" height="32" viewBox="0 0 32 32">
-      <circle cx="16" cy="16" r="16" fill="#1a73e8"/>
-      <path d="M10 22 L16 10 L22 22" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M12 18h8" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
-      <circle cx="16" cy="10" r="2" fill="#fbbc04"/>
-    </svg>
+<!-- TOP BAR -->
+<header class="topbar">
+  <a class="topbar-logo" href="/">
+    <div class="topbar-logo-icon">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+    </div>
     CryptoVol
   </a>
-  <span class="app-bar-divider">/</span>
-  <span class="app-bar-subtitle">Volatility Intelligence Platform</span>
-  <div class="app-bar-spacer"></div>
-  <div class="status-pill" id="statusPill">
-    <div class="status-dot"></div>
-    <span id="statusText">Checking…</span>
+  <nav class="topbar-nav">
+    <button class="topbar-tab active" onclick="nav('predict')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      Predict
+    </button>
+    <button class="topbar-tab" onclick="nav('batch')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      Batch
+    </button>
+    <button class="topbar-tab" onclick="nav('api')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+      API
+    </button>
+    <button class="topbar-tab" onclick="nav('health')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      Health
+    </button>
+  </nav>
+  <div class="topbar-end">
+    <div class="status-badge" id="apiStatus">
+      <div class="status-dot"></div>
+      <span id="apiStatusTxt">Connecting</span>
+    </div>
   </div>
 </header>
 
-<!-- Layout -->
 <div class="layout">
 
-  <!-- Sidebar -->
-  <nav class="sidebar">
-    <div class="nav-section-title">Predict</div>
-    <div class="nav-item active" onclick="showSection('single')">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-      Single Coin
-    </div>
-    <div class="nav-item" onclick="showSection('batch')">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-      Batch Analysis
-    </div>
-    <div style="height:16px"></div>
-    <div class="nav-section-title">System</div>
-    <div class="nav-item" onclick="showSection('api')">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-      API Explorer
-    </div>
-    <div class="nav-item" onclick="showSection('health')">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-      Health Monitor
-    </div>
-  </nav>
+<!-- SIDEBAR -->
+<nav class="sidebar">
+  <div class="sidebar-group-title">Analysis</div>
+  <div class="sidebar-item active" id="sl-predict" onclick="nav('predict')">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    Single Coin
+  </div>
+  <div class="sidebar-item" id="sl-batch" onclick="nav('batch')">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+    Batch Analysis
+  </div>
+  <div class="sidebar-sep"></div>
+  <div class="sidebar-group-title">System</div>
+  <div class="sidebar-item" id="sl-api" onclick="nav('api')">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+    API Explorer
+  </div>
+  <div class="sidebar-item" id="sl-health" onclick="nav('health')">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+    Health Monitor
+  </div>
+</nav>
 
-  <!-- Main -->
-  <main class="main">
+<!-- CONTENT -->
+<main class="content">
 
-    <!-- Metric Strip -->
-    <div class="metric-grid">
-      <div class="metric-card blue">
-        <div class="metric-label">SUPPORTED COINS</div>
-        <div class="metric-value">50+</div>
-        <div class="metric-sub">cryptocurrencies tracked</div>
-      </div>
-      <div class="metric-card green">
-        <div class="metric-label">MODEL TYPE</div>
-        <div class="metric-value">XGB</div>
-        <div class="metric-sub">XGBoost + Random Forest ensemble</div>
-      </div>
-      <div class="metric-card yellow">
-        <div class="metric-label">FEATURES</div>
-        <div class="metric-value">24</div>
-        <div class="metric-sub">engineered signals</div>
-      </div>
-      <div class="metric-card red" id="apiMetric">
-        <div class="metric-label">API STATUS</div>
-        <div class="metric-value" id="metricStatus">—</div>
-        <div class="metric-sub" id="metricSub">connecting…</div>
-      </div>
+  <!-- ── Stat Strip ─────────────────────────────────────────────── -->
+  <div class="stats">
+    <div class="stat accent-blue">
+      <div class="stat-label">Model</div>
+      <div class="stat-val">XGB</div>
+      <div class="stat-note">XGBoost + Random Forest</div>
+    </div>
+    <div class="stat accent-green">
+      <div class="stat-label">Coins tracked</div>
+      <div class="stat-val">50+</div>
+      <div class="stat-note">Live yfinance data</div>
+    </div>
+    <div class="stat accent-amber">
+      <div class="stat-label">Features</div>
+      <div class="stat-val">24</div>
+      <div class="stat-note">Bollinger · ATR · MACD</div>
+    </div>
+    <div class="stat accent-dynamic">
+      <div class="stat-label">API Latency</div>
+      <div class="stat-val" id="statLatency">—</div>
+      <div class="stat-note" id="statLatencyNote">pending</div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <!-- SECTION: Single Predict                                      -->
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <section id="sec-predict">
+    <div class="page-head">
+      <div class="page-title">Single Coin Prediction</div>
+      <div class="page-desc">Fetch live OHLCV data and predict forward volatility with our ML ensemble.</div>
     </div>
 
-    <!-- SECTION: Single Coin ─────────────────────────── -->
-    <section id="section-single">
-      <div class="page-header">
-        <div class="page-title">Single Coin Prediction</div>
-        <div class="page-subtitle">Select a cryptocurrency and forecast its volatility over a given horizon.</div>
-      </div>
-
-      <div class="card">
-        <div class="card-body">
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">CRYPTOCURRENCY</label>
-              <select class="form-select" id="singleSymbol">
-                {% for s in symbols %}
-                <option value="{{ s }}">{{ s.replace('-USD','') }}</option>
-                {% endfor %}
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">HISTORY PERIOD</label>
-              <select class="form-select" id="singlePeriod">
-                <option value="3mo">3 Months</option>
-                <option value="6mo" selected>6 Months</option>
-                <option value="1y">1 Year</option>
-                <option value="2y">2 Years</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">FORECAST HORIZON (days)</label>
-              <input class="form-input" type="number" id="singleHorizon" value="7" min="1" max="30" style="width:140px"/>
-            </div>
-            <button class="btn btn-primary" id="singleBtn" onclick="predictSingle()">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+    <div class="card">
+      <div class="card-body">
+        <div class="fields">
+          <div class="field">
+            <label>Cryptocurrency</label>
+            <select id="pCoin" style="width:160px">
+              {% for c in coins %}<option value="{{ c }}">{{ c.replace('-USD','') }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label>History Period</label>
+            <select id="pPeriod" style="width:140px">
+              <option value="3mo">3 months</option>
+              <option value="6mo" selected>6 months</option>
+              <option value="1y">1 year</option>
+              <option value="2y">2 years</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Horizon (days)</label>
+            <input id="pHorizon" type="number" value="7" min="1" max="30" style="width:110px"/>
+          </div>
+          <div class="field" style="justify-content:flex-end">
+            <button class="btn btn-primary" id="pBtn" onclick="doPredict()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Predict
-              <div class="spinner" id="singleSpinner"></div>
+              <div class="spin" id="pSpin"></div>
             </button>
           </div>
+        </div>
 
-          <div class="progress-bar" id="singleProgress"><div class="progress-fill"></div></div>
+        <div class="prog" id="pProg"><div class="prog-fill"></div></div>
+        <div class="err" id="pErr"><svg class="err-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg><span id="pErrMsg"></span></div>
 
-          <div class="error-banner" id="singleError">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-            <span id="singleErrorMsg"></span>
+        <div class="result-box fade" id="pResult">
+          <div class="result-top">
+            <span class="result-label" id="pResultLabel">Prediction</span>
+            <span class="result-ts" id="pResultTs"></span>
           </div>
-
-          <div class="result-panel" id="singleResult">
-            <div class="result-header">
-              <div class="result-title" id="singleResultTitle">Prediction Result</div>
-              <span id="singleTimestamp" style="font-size:12px;color:var(--text-hint)"></span>
+          <div class="result-body">
+            <div style="display:flex;align-items:baseline;gap:4px">
+              <div class="vol-big" id="pVolVal">—</div>
+              <div class="vol-pct">%</div>
             </div>
-            <div class="result-body">
-              <div class="vol-display">
-                <div>
-                  <div style="font-size:12px;color:var(--text-secondary);font-weight:500;margin-bottom:6px">PREDICTED VOLATILITY</div>
-                  <div style="display:flex;align-items:baseline;gap:4px">
-                    <div class="vol-number" id="singleVolVal">—</div>
-                    <div class="vol-unit">%</div>
-                  </div>
-                </div>
-                <div class="vol-meta">
-                  <div class="vol-badge" id="singleBadge">—</div>
-                  <div class="vol-coin" id="singleCoinLabel"></div>
-                  <div class="vol-latency" id="singleLatency"></div>
-                </div>
-              </div>
+            <div class="vol-detail">
+              <div class="regime-chip" id="pRegime">—</div>
+              <div class="vol-meta" id="pMeta">—</div>
+              <div class="vol-meta" id="pLatency" style="color:var(--blue)">—</div>
             </div>
           </div>
         </div>
       </div>
-    </section>
+    </div>
+  </section>
 
-    <!-- SECTION: Batch ───────────────────────────────── -->
-    <section id="section-batch" style="display:none">
-      <div class="page-header">
-        <div class="page-title">Batch Analysis</div>
-        <div class="page-subtitle">Select multiple coins and compare predicted volatility side-by-side.</div>
-      </div>
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <!-- SECTION: Batch                                               -->
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <section id="sec-batch" style="display:none">
+    <div class="page-head">
+      <div class="page-title">Batch Analysis</div>
+      <div class="page-desc">Compare predicted volatility across multiple coins at once, ranked by risk.</div>
+    </div>
 
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-            Select Coins
-          </div>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-outlined" style="height:32px;padding:0 16px;font-size:13px" onclick="selectAll()">Select All</button>
-            <button class="btn btn-outlined" style="height:32px;padding:0 16px;font-size:13px;border-color:var(--border);color:var(--text-secondary)" onclick="clearAll()">Clear</button>
-          </div>
+    <div class="card">
+      <div class="card-body">
+        <div class="chip-actions">
+          <button class="btn btn-ghost btn-sm" onclick="selAll()">Select all</button>
+          <button class="btn btn-ghost btn-sm" onclick="clrAll()">Clear</button>
+          <span style="font-size:12px;color:var(--ink-4);align-self:center;margin-left:4px"><span id="selCount">0</span> selected</span>
         </div>
-        <div class="card-body">
-          <div class="chip-group" id="chipGroup">
-            {% for s in symbols %}
-            <div class="chip" data-sym="{{ s }}" onclick="toggleChip(this)">{{ s.replace('-USD','') }}</div>
-            {% endfor %}
-          </div>
+        <div class="chips" id="chipGroup">
+          {% for c in coins %}
+          <div class="coin-chip" data-sym="{{ c }}" onclick="toggleChip(this)">{{ c.replace('-USD','') }}</div>
+          {% endfor %}
+        </div>
 
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">HISTORY PERIOD</label>
-              <select class="form-select" id="batchPeriod">
-                <option value="3mo">3 Months</option>
-                <option value="6mo" selected>6 Months</option>
-                <option value="1y">1 Year</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">FORECAST HORIZON (days)</label>
-              <input class="form-input" type="number" id="batchHorizon" value="7" min="1" max="30" style="width:140px"/>
-            </div>
-            <button class="btn btn-primary" id="batchBtn" onclick="predictBatch()">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        <div class="fields">
+          <div class="field">
+            <label>History Period</label>
+            <select id="bPeriod" style="width:140px">
+              <option value="3mo">3 months</option>
+              <option value="6mo" selected>6 months</option>
+              <option value="1y">1 year</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Horizon (days)</label>
+            <input id="bHorizon" type="number" value="7" min="1" max="30" style="width:110px"/>
+          </div>
+          <div class="field" style="justify-content:flex-end">
+            <button class="btn btn-primary" id="bBtn" onclick="doBatch()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Analyse Selected
-              <div class="spinner" id="batchSpinner"></div>
+              <div class="spin" id="bSpin"></div>
             </button>
           </div>
+        </div>
 
-          <div class="progress-bar" id="batchProgress"><div class="progress-fill"></div></div>
-          <div class="error-banner" id="batchError">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-            <span id="batchErrorMsg"></span>
-          </div>
+        <div class="prog" id="bProg"><div class="prog-fill"></div></div>
+        <div class="err" id="bErr"><svg class="err-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg><span id="bErrMsg"></span></div>
 
-          <div id="batchResultWrap" style="display:none;margin-top:4px">
-            <table class="results-table" id="batchTable">
-              <thead>
-                <tr>
-                  <th>COIN</th>
-                  <th>VOLATILITY</th>
-                  <th>VISUALIZATION</th>
-                  <th>REGIME</th>
-                  <th>HORIZON</th>
-                </tr>
-              </thead>
-              <tbody id="batchTbody"></tbody>
-            </table>
-          </div>
+        <div id="bTableWrap" style="display:none;margin-top:8px;overflow:auto">
+          <table class="data-table">
+            <thead><tr>
+              <th>#</th><th>Coin</th><th>Volatility</th>
+              <th style="min-width:160px">Risk Level</th><th>Regime</th><th>Horizon</th>
+            </tr></thead>
+            <tbody id="bTbody"></tbody>
+          </table>
         </div>
       </div>
-    </section>
+    </div>
+  </section>
 
-    <!-- SECTION: API Explorer ───────────────────────── -->
-    <section id="section-api" style="display:none">
-      <div class="page-header">
-        <div class="page-title">API Explorer</div>
-        <div class="page-subtitle">Browse available endpoints and test them directly.</div>
-      </div>
-      <div class="card">
-        <div class="card-body">
-          <div class="info-grid">
-            <div>
-              <div style="font-size:13px;font-weight:500;margin-bottom:12px;color:var(--text-secondary)">ENDPOINTS</div>
-              <div class="info-row"><span class="info-key">GET  /</span><span class="info-val">Root info</span></div>
-              <div class="info-row"><span class="info-key">GET  /health</span><span class="info-val">Health check</span></div>
-              <div class="info-row"><span class="info-key">POST /predict</span><span class="info-val">Single prediction</span></div>
-              <div class="info-row"><span class="info-key">POST /predict/batch</span><span class="info-val">Batch prediction</span></div>
-              <div class="info-row"><span class="info-key">POST /predict/features</span><span class="info-val">Custom features</span></div>
-              <div class="info-row"><span class="info-key">GET  /model/info</span><span class="info-val">Model metadata</span></div>
-              <div class="info-row"><span class="info-key">GET  /symbols</span><span class="info-val">Supported coins</span></div>
-              <div class="info-row"><span class="info-key">GET  /docs</span><span class="info-val">Swagger UI</span></div>
-            </div>
-            <div>
-              <div style="font-size:13px;font-weight:500;margin-bottom:12px;color:var(--text-secondary)">QUICK LINKS</div>
-              <div style="display:flex;flex-direction:column;gap:10px">
-                <a href="{{ fastapi_url }}/docs" target="_blank" class="btn btn-outlined" style="text-decoration:none;width:fit-content">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                  Open Swagger UI
-                </a>
-                <a href="{{ fastapi_url }}/health" target="_blank" class="btn btn-outlined" style="text-decoration:none;width:fit-content">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-                  Health Endpoint
-                </a>
-                <a href="{{ fastapi_url }}/model/info" target="_blank" class="btn btn-outlined" style="text-decoration:none;width:fit-content">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                  Model Info
-                </a>
-              </div>
-            </div>
-          </div>
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <!-- SECTION: API Explorer                                        -->
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <section id="sec-api" style="display:none">
+    <div class="page-head">
+      <div class="page-title">API Explorer</div>
+      <div class="page-desc">All FastAPI endpoints exposed by the ML backend.</div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <div class="endpoint-list">
+          <div class="endpoint-row"><span class="method get">GET</span><span class="ep-path">/</span><span class="ep-desc">API root info</span></div>
+          <div class="endpoint-row"><span class="method get">GET</span><span class="ep-path">/health</span><span class="ep-desc">Service health check</span></div>
+          <div class="endpoint-row"><span class="method post">POST</span><span class="ep-path">/predict</span><span class="ep-desc">Single-coin volatility prediction</span></div>
+          <div class="endpoint-row"><span class="method post">POST</span><span class="ep-path">/predict/batch</span><span class="ep-desc">Multi-coin batch prediction</span></div>
+          <div class="endpoint-row"><span class="method post">POST</span><span class="ep-path">/predict/features</span><span class="ep-desc">Predict from custom feature vector</span></div>
+          <div class="endpoint-row"><span class="method get">GET</span><span class="ep-path">/model/info</span><span class="ep-desc">Model metadata & training stats</span></div>
+          <div class="endpoint-row"><span class="method get">GET</span><span class="ep-path">/symbols</span><span class="ep-desc">List of supported coin symbols</span></div>
+          <div class="endpoint-row"><span class="method get">GET</span><span class="ep-path">/docs</span><span class="ep-desc">Interactive Swagger UI</span></div>
+        </div>
+        <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap">
+          <a class="btn btn-primary btn-sm" href="{{ fastapi_url }}/docs" target="_blank">Open Swagger UI ↗</a>
+          <a class="btn btn-ghost btn-sm" href="{{ fastapi_url }}/health" target="_blank">Health ↗</a>
+          <a class="btn btn-ghost btn-sm" href="{{ fastapi_url }}/model/info" target="_blank">Model Info ↗</a>
         </div>
       </div>
-    </section>
+    </div>
+  </section>
 
-    <!-- SECTION: Health ─────────────────────────────── -->
-    <section id="section-health" style="display:none">
-      <div class="page-header">
-        <div class="page-title">Health Monitor</div>
-        <div class="page-subtitle">Real-time status of all services.</div>
-      </div>
-      <div class="card">
-        <div class="card-body" id="healthBody">
-          <div class="empty-state">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-            <p>Loading health data…</p>
-          </div>
-        </div>
-      </div>
-    </section>
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <!-- SECTION: Health                                              -->
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <section id="sec-health" style="display:none">
+    <div class="page-head">
+      <div class="page-title">Health Monitor</div>
+      <div class="page-desc">Real-time service status and system metrics.</div>
+    </div>
+    <div id="healthContent">
+      <div style="color:var(--ink-4);font-size:13px;padding:20px 0">Loading health data…</div>
+    </div>
+  </section>
 
-  </main>
+</main>
 </div>
 
-<!-- Toast Container -->
-<div class="toast-container" id="toastContainer"></div>
+<!-- TOASTS -->
+<div class="toasts" id="toasts"></div>
 
 <script>
-  const API = "{{ fastapi_url }}";
+const API_BASE = '';   // Flask proxies everything — no CORS, no hostname issues
 
-  // ── Navigation ──────────────────────────────────────────────────────────────
-  function showSection(id) {
-    ['single','batch','api','health'].forEach(s => {
-      document.getElementById('section-'+s).style.display = s===id ? '' : 'none';
-    });
-    document.querySelectorAll('.nav-item').forEach((el, i) => {
-      el.classList.toggle('active', i === ['single','batch','api','health'].indexOf(id));
-    });
-    if (id === 'health') loadHealth();
-  }
+// ── Navigation ────────────────────────────────────────────────────────────────
+const SECTIONS = ['predict','batch','api','health'];
+function nav(id){
+  SECTIONS.forEach(s=>{
+    document.getElementById('sec-'+s).style.display = s===id?'':'none';
+    const sl = document.getElementById('sl-'+s);
+    if(sl) sl.classList.toggle('active', s===id);
+  });
+  document.querySelectorAll('.topbar-tab').forEach((el,i)=>{
+    el.classList.toggle('active', SECTIONS[i]===id);
+  });
+  if(id==='health') loadHealth();
+}
 
-  // ── Toast ───────────────────────────────────────────────────────────────────
-  function toast(msg, isError=false) {
-    const t = document.createElement('div');
-    t.className = 'toast' + (isError ? ' error' : '');
-    t.textContent = msg;
-    document.getElementById('toastContainer').appendChild(t);
-    setTimeout(() => t.remove(), 4000);
-  }
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg, isErr=false){
+  const el = document.createElement('div');
+  el.className = 'toast'+(isErr?' err':'');
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(()=>el.remove(), 4500);
+}
 
-  // ── Status Check ────────────────────────────────────────────────────────────
-  async function checkStatus() {
-    const pill = document.getElementById('statusPill');
-    const txt  = document.getElementById('statusText');
-    const met  = document.getElementById('metricStatus');
-    const sub  = document.getElementById('metricSub');
-    try {
-      const r = await fetch('/api/health', {signal: AbortSignal.timeout(5000)});
-      const d = await r.json();
-      if (d.status === 'ok' || d.model_loaded !== undefined) {
-        pill.className = 'status-pill online';
-        txt.textContent = 'API Online';
-        met.textContent = 'UP';
-        sub.textContent = 'FastAPI responding';
-      } else throw new Error();
-    } catch {
-      pill.className = 'status-pill offline';
-      txt.textContent = 'API Offline';
-      met.textContent = 'DOWN';
-      sub.textContent = 'Cannot reach FastAPI';
-    }
-  }
-
-  // ── Single Prediction ───────────────────────────────────────────────────────
-  async function predictSingle() {
-    const sym     = document.getElementById('singleSymbol').value;
-    const period  = document.getElementById('singlePeriod').value;
-    const horizon = parseInt(document.getElementById('singleHorizon').value) || 7;
-    const btn     = document.getElementById('singleBtn');
-    const spinner = document.getElementById('singleSpinner');
-    const errEl   = document.getElementById('singleError');
-    const errMsg  = document.getElementById('singleErrorMsg');
-    const resEl   = document.getElementById('singleResult');
-    const progEl  = document.getElementById('singleProgress');
-
-    btn.disabled = true; spinner.style.display = 'block';
-    errEl.classList.remove('visible'); resEl.classList.remove('visible');
-    progEl.classList.add('active');
-
+// ── API health status pill ────────────────────────────────────────────────────
+async function checkAPI(){
+  const badge = document.getElementById('apiStatus');
+  const txt   = document.getElementById('apiStatusTxt');
+  try{
     const t0 = Date.now();
-    try {
-      const res = await fetch('/api/predict', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({symbol: sym, period, horizon_days: horizon})
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Prediction failed');
-
-      const latency = Date.now() - t0;
-      const vol = (data.predicted_volatility * 100).toFixed(2);
-      const regime = (data.volatility_regime || '').toLowerCase();
-
-      document.getElementById('singleVolVal').textContent = vol;
-      document.getElementById('singleResultTitle').textContent = `${sym.replace('-USD','')} · ${horizon}-day forecast`;
-      document.getElementById('singleCoinLabel').textContent = `${period} history  ·  horizon ${horizon}d`;
-      document.getElementById('singleLatency').textContent = `Response time: ${latency}ms`;
-      document.getElementById('singleTimestamp').textContent = new Date().toLocaleTimeString();
-
-      const badge = document.getElementById('singleBadge');
-      badge.className = 'vol-badge';
-      if (regime.includes('low'))  { badge.classList.add('badge-low');    badge.textContent = '🟢 Low Volatility'; }
-      else if (regime.includes('high')) { badge.classList.add('badge-high');  badge.textContent = '🔴 High Volatility'; }
-      else                         { badge.classList.add('badge-medium'); badge.textContent = '🟡 Medium Volatility'; }
-
-      resEl.classList.add('visible');
-    } catch(e) {
-      errMsg.textContent = e.message;
-      errEl.classList.add('visible');
-      toast(e.message, true);
-    } finally {
-      btn.disabled = false; spinner.style.display = 'none';
-      progEl.classList.remove('active');
-    }
+    const r  = await fetch('/proxy/health',{signal:AbortSignal.timeout(5000)});
+    const ms = Date.now()-t0;
+    if(r.ok){
+      badge.className='status-badge live';
+      txt.textContent='API Online';
+      document.getElementById('statLatency').textContent = ms+'ms';
+      document.getElementById('statLatencyNote').textContent='last health check';
+    } else throw new Error();
+  } catch{
+    badge.className='status-badge down';
+    txt.textContent='API Offline';
+    document.getElementById('statLatency').textContent='—';
+    document.getElementById('statLatencyNote').textContent='unreachable';
   }
+}
 
-  // ── Chip Selection ──────────────────────────────────────────────────────────
-  function toggleChip(el) { el.classList.toggle('selected'); }
-  function selectAll()    { document.querySelectorAll('.chip').forEach(c => c.classList.add('selected')); }
-  function clearAll()     { document.querySelectorAll('.chip').forEach(c => c.classList.remove('selected')); }
+// ── Single prediction ─────────────────────────────────────────────────────────
+async function doPredict(){
+  const sym     = document.getElementById('pCoin').value;
+  const period  = document.getElementById('pPeriod').value;
+  const horizon = parseInt(document.getElementById('pHorizon').value)||7;
 
-  // ── Batch Prediction ────────────────────────────────────────────────────────
-  async function predictBatch() {
-    const selected = [...document.querySelectorAll('.chip.selected')].map(c => c.dataset.sym);
-    if (!selected.length) { toast('Please select at least one coin.', true); return; }
+  const btn  = document.getElementById('pBtn');
+  const spin = document.getElementById('pSpin');
+  const prog = document.getElementById('pProg');
+  const err  = document.getElementById('pErr');
+  const res  = document.getElementById('pResult');
 
-    const period  = document.getElementById('batchPeriod').value;
-    const horizon = parseInt(document.getElementById('batchHorizon').value) || 7;
-    const btn     = document.getElementById('batchBtn');
-    const spinner = document.getElementById('batchSpinner');
-    const errEl   = document.getElementById('batchError');
-    const errMsg  = document.getElementById('batchErrorMsg');
-    const wrap    = document.getElementById('batchResultWrap');
-    const tbody   = document.getElementById('batchTbody');
-    const prog    = document.getElementById('batchProgress');
+  btn.disabled=true; spin.style.display='block';
+  prog.classList.add('on'); err.classList.remove('on'); res.classList.remove('on');
 
-    btn.disabled = true; spinner.style.display = 'block';
-    errEl.classList.remove('visible'); wrap.style.display = 'none';
-    prog.classList.add('active');
+  const t0 = Date.now();
+  try{
+    const resp = await fetch('/proxy/predict',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({symbol:sym, period, horizon_days:horizon})
+    });
+    const data = await resp.json();
+    if(!resp.ok) throw new Error(data.detail||'Prediction failed');
 
-    try {
-      const res = await fetch('/api/predict/batch?' + new URLSearchParams({period, horizon_days: horizon}), {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({symbols: selected})
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Batch prediction failed');
+    const ms  = Date.now()-t0;
+    const vol = (data.predicted_volatility*100).toFixed(3);
+    const reg = (data.volatility_regime||'').toLowerCase();
 
-      const rows = data.predictions || data;
-      const maxVol = Math.max(...rows.map(r => r.predicted_volatility));
-      tbody.innerHTML = '';
+    document.getElementById('pVolVal').textContent = vol;
+    document.getElementById('pResultLabel').textContent =
+      sym.replace('-USD','') + ' · ' + horizon + '-day forecast';
+    document.getElementById('pResultTs').textContent = new Date().toLocaleTimeString();
+    document.getElementById('pMeta').textContent =
+      period + ' history  ·  annualised volatility';
+    document.getElementById('pLatency').textContent = '⚡ ' + ms + 'ms response time';
 
-      rows.sort((a,b) => b.predicted_volatility - a.predicted_volatility)
-          .forEach(r => {
-        const vol   = (r.predicted_volatility * 100).toFixed(3);
-        const regime = (r.volatility_regime || '').toLowerCase();
-        let badge, cls;
-        if (regime.includes('low'))       { badge='🟢 Low';    cls='badge-low'; }
-        else if (regime.includes('high')) { badge='🔴 High';   cls='badge-high'; }
-        else                               { badge='🟡 Medium'; cls='badge-medium'; }
+    const chip = document.getElementById('pRegime');
+    chip.className='regime-chip';
+    if(reg.includes('low'))       { chip.classList.add('chip-low');    chip.textContent='● Low Volatility'; }
+    else if(reg.includes('high')) { chip.classList.add('chip-high');   chip.textContent='● High Volatility'; }
+    else                           { chip.classList.add('chip-medium'); chip.textContent='● Medium Volatility'; }
 
-        const barW = Math.max(4, Math.round((r.predicted_volatility/maxVol)*120));
-        tbody.insertAdjacentHTML('beforeend', `
-          <tr>
-            <td><strong>${r.symbol.replace('-USD','')}</strong></td>
-            <td><span style="font-variant-numeric:tabular-nums;font-family:var(--font-mono)">${vol}%</span></td>
-            <td><div class="vol-bar-wrap"><div class="vol-bar" style="width:${barW}px"></div><span style="font-size:12px;color:var(--text-hint)">${vol}</span></div></td>
-            <td><span class="vol-badge ${cls}" style="padding:3px 10px;font-size:12px">${badge}</span></td>
-            <td style="color:var(--text-secondary)">${horizon}d</td>
-          </tr>`);
-      });
-      wrap.style.display = '';
-    } catch(e) {
-      errMsg.textContent = e.message;
-      errEl.classList.add('visible');
-      toast(e.message, true);
-    } finally {
-      btn.disabled = false; spinner.style.display = 'none';
-      prog.classList.remove('active');
-    }
+    res.classList.add('on');
+    // Update latency stat
+    document.getElementById('statLatency').textContent = ms+'ms';
+    document.getElementById('statLatencyNote').textContent = sym.replace('-USD','')+' prediction';
+  } catch(e){
+    document.getElementById('pErrMsg').textContent = e.message;
+    err.classList.add('on');
+    toast(e.message, true);
+  } finally{
+    btn.disabled=false; spin.style.display='none'; prog.classList.remove('on');
   }
+}
 
-  // ── Health Monitor ──────────────────────────────────────────────────────────
-  async function loadHealth() {
-    const body = document.getElementById('healthBody');
-    try {
-      const res  = await fetch('/api/health');
-      const data = await res.json();
-      body.innerHTML = `
-        <div style="display:flex;flex-direction:column;gap:12px">
-          <div class="info-row"><span class="info-key">FastAPI Status</span><span class="info-val" style="color:var(--green)">● Online</span></div>
-          <div class="info-row"><span class="info-key">Model Loaded</span><span class="info-val">${data.model_loaded ?? data.status}</span></div>
-          <div class="info-row"><span class="info-key">Checked At</span><span class="info-val">${new Date().toLocaleString()}</span></div>
-          <div class="info-row"><span class="info-key">API Base URL</span><span class="info-val">${API}</span></div>
-        </div>`;
-    } catch {
-      body.innerHTML = `<div class="error-banner visible">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-        Cannot reach FastAPI at ${API}
-      </div>`;
-    }
+// ── Chip group ────────────────────────────────────────────────────────────────
+function toggleChip(el){
+  el.classList.toggle('sel');
+  updateSelCount();
+}
+function selAll(){ document.querySelectorAll('.coin-chip').forEach(c=>c.classList.add('sel')); updateSelCount(); }
+function clrAll(){ document.querySelectorAll('.coin-chip').forEach(c=>c.classList.remove('sel')); updateSelCount(); }
+function updateSelCount(){ document.getElementById('selCount').textContent=document.querySelectorAll('.coin-chip.sel').length; }
+
+// ── Batch prediction ──────────────────────────────────────────────────────────
+async function doBatch(){
+  const syms = [...document.querySelectorAll('.coin-chip.sel')].map(c=>c.dataset.sym);
+  if(!syms.length){ toast('Select at least one coin.', true); return; }
+
+  const period  = document.getElementById('bPeriod').value;
+  const horizon = parseInt(document.getElementById('bHorizon').value)||7;
+  const btn  = document.getElementById('bBtn');
+  const spin = document.getElementById('bSpin');
+  const prog = document.getElementById('bProg');
+  const err  = document.getElementById('bErr');
+  const wrap = document.getElementById('bTableWrap');
+
+  btn.disabled=true; spin.style.display='block';
+  prog.classList.add('on'); err.classList.remove('on'); wrap.style.display='none';
+
+  try{
+    const resp = await fetch('/proxy/predict/batch?period='+period+'&horizon_days='+horizon,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({symbols:syms})
+    });
+    const data = await resp.json();
+    if(!resp.ok) throw new Error(data.detail||'Batch failed');
+
+    const rows = (data.predictions||data)
+      .sort((a,b)=>b.predicted_volatility - a.predicted_volatility);
+    const maxVol = Math.max(...rows.map(r=>r.predicted_volatility));
+    const tbody  = document.getElementById('bTbody');
+    tbody.innerHTML='';
+
+    rows.forEach((r,i)=>{
+      const vol    = (r.predicted_volatility*100).toFixed(3);
+      const pct    = Math.max(4, Math.round(r.predicted_volatility/maxVol*100));
+      const regime = (r.volatility_regime||'').toLowerCase();
+      let chipCls, chipTxt;
+      if(regime.includes('low'))       { chipCls='chip-low';    chipTxt='● Low'; }
+      else if(regime.includes('high')) { chipCls='chip-high';   chipTxt='● High'; }
+      else                              { chipCls='chip-medium'; chipTxt='● Medium'; }
+
+      const rankCls = i===0?'rank-1':i===1?'rank-2':i===2?'rank-3':'rank-n';
+      tbody.insertAdjacentHTML('beforeend',`
+        <tr>
+          <td><span class="rank-badge ${rankCls}">${i+1}</span></td>
+          <td><span class="coin-name">${r.symbol.replace('-USD','')}</span></td>
+          <td><span class="vol-cell">${vol}%</span></td>
+          <td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div><span style="font-size:11px;color:var(--ink-4);font-family:var(--mono)">${vol}</span></div></td>
+          <td><span class="regime-chip ${chipCls}" style="padding:3px 10px;font-size:11px">${chipTxt}</span></td>
+          <td style="color:var(--ink-4)">${horizon}d</td>
+        </tr>`);
+    });
+    wrap.style.display='';
+  } catch(e){
+    document.getElementById('bErrMsg').textContent = e.message;
+    err.classList.add('on');
+    toast(e.message, true);
+  } finally{
+    btn.disabled=false; spin.style.display='none'; prog.classList.remove('on');
   }
+}
 
-  // ── Init ────────────────────────────────────────────────────────────────────
-  checkStatus();
-  setInterval(checkStatus, 30000);
+// ── Health Monitor ────────────────────────────────────────────────────────────
+async function loadHealth(){
+  const hc = document.getElementById('healthContent');
+  try{
+    const t0 = Date.now();
+    const r  = await fetch('/proxy/health');
+    const d  = await r.json();
+    const ms = Date.now()-t0;
+
+    const mi = await fetch('/proxy/model-info').then(r=>r.json()).catch(()=>({}));
+
+    hc.innerHTML = `
+    <div class="health-grid">
+      <div class="health-card">
+        <div class="health-card-title">FastAPI Service</div>
+        <div class="health-row"><span class="health-key">Status</span><span class="online-tag"><div class="online-dot"></div>Online</span></div>
+        <div class="health-row"><span class="health-key">Response</span><span class="health-val">${ms}ms</span></div>
+        <div class="health-row"><span class="health-key">Model Loaded</span><span class="health-val">${d.model_loaded ?? d.status ?? '—'}</span></div>
+        <div class="health-row"><span class="health-key">Checked At</span><span class="health-val">${new Date().toLocaleTimeString()}</span></div>
+      </div>
+      <div class="health-card">
+        <div class="health-card-title">Model Info</div>
+        <div class="health-row"><span class="health-key">Best Model</span><span class="health-val">${mi.best_model||'XGBoost'}</span></div>
+        <div class="health-row"><span class="health-key">Train Start</span><span class="health-val">${mi.train_start||'2019-01-01'}</span></div>
+        <div class="health-row"><span class="health-key">Train End</span><span class="health-val">${mi.train_end||'2022-12-31'}</span></div>
+        <div class="health-row"><span class="health-key">Features</span><span class="health-val">${(mi.features||[]).length||24}</span></div>
+      </div>
+      <div class="health-card">
+        <div class="health-card-title">Flask Service</div>
+        <div class="health-row"><span class="health-key">Status</span><span class="online-tag"><div class="online-dot"></div>Online</span></div>
+        <div class="health-row"><span class="health-key">Port</span><span class="health-val">5000</span></div>
+        <div class="health-row"><span class="health-key">Proxy</span><span class="health-val">→ FastAPI :8000</span></div>
+        <div class="health-row"><span class="health-key">Uptime</span><span class="health-val">Active</span></div>
+      </div>
+    </div>`;
+  } catch(e){
+    hc.innerHTML = `<div class="err on"><svg class="err-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>Cannot reach API: ${e.message}</div>`;
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+checkAPI();
+setInterval(checkAPI, 30000);
+updateSelCount();
 </script>
 </body>
-</html>
-"""
+</html>"""
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ── Flask routes ──────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
-    return render_template_string(
-        HTML,
-        symbols=SUPPORTED_SYMBOLS,
-        fastapi_url=FASTAPI_URL,
-    )
+    return render_template_string(PAGE, coins=COINS, fastapi_url=FASTAPI_URL)
 
 
-@app.route("/api/health")
-def health():
-    """Proxy health check to FastAPI."""
+def _proxy(path, method="GET", **kwargs):
+    """Generic proxy to FastAPI with timeout and error handling."""
+    url = f"{FASTAPI_URL}/{path.lstrip('/')}"
     try:
-        r = requests.get(f"{FASTAPI_URL}/health", timeout=5)
-        return jsonify(r.json()), r.status_code
+        r = requests.request(method, url, timeout=90, **kwargs)
+        return r.json(), r.status_code
+    except requests.Timeout:
+        return {"detail": "FastAPI request timed out (90s). Try fewer coins or shorter period."}, 504
     except Exception as e:
-        return jsonify({"status": "error", "detail": str(e)}), 503
+        return {"detail": f"Cannot reach FastAPI: {str(e)}"}, 503
 
 
-@app.route("/api/predict", methods=["POST"])
-def predict():
-    """Proxy single-coin prediction to FastAPI."""
-    try:
-        payload = request.get_json()
-        r = requests.post(f"{FASTAPI_URL}/predict", json=payload, timeout=60)
-        return jsonify(r.json()), r.status_code
-    except Exception as e:
-        return jsonify({"detail": str(e)}), 503
+@app.route("/proxy/health")
+def proxy_health():
+    data, code = _proxy("/health")
+    return jsonify(data), code
 
 
-@app.route("/api/predict/batch", methods=["POST"])
-def predict_batch():
-    """Proxy batch prediction to FastAPI."""
-    try:
-        payload  = request.get_json()
-        params   = request.args.to_dict()
-        r = requests.post(
-            f"{FASTAPI_URL}/predict/batch",
-            json=payload, params=params, timeout=120
-        )
-        return jsonify(r.json()), r.status_code
-    except Exception as e:
-        return jsonify({"detail": str(e)}), 503
+@app.route("/proxy/model-info")
+def proxy_model_info():
+    data, code = _proxy("/model/info")
+    return jsonify(data), code
 
 
-@app.route("/api/model/info")
-def model_info():
-    try:
-        r = requests.get(f"{FASTAPI_URL}/model/info", timeout=5)
-        return jsonify(r.json()), r.status_code
-    except Exception as e:
-        return jsonify({"detail": str(e)}), 503
+@app.route("/proxy/predict", methods=["POST"])
+def proxy_predict():
+    """
+    Proxy single-coin prediction.
+    The key fix: each request independently fetches live data for that specific coin.
+    """
+    payload = request.get_json(force=True)
+    data, code = _proxy("/predict", method="POST", json=payload)
+    return jsonify(data), code
+
+
+@app.route("/proxy/predict/batch", methods=["POST"])
+def proxy_predict_batch():
+    """
+    Proxy batch prediction.
+    Passes query params (period, horizon_days) + body (symbols list) to FastAPI.
+    """
+    payload = request.get_json(force=True)
+    params  = request.args.to_dict()
+    data, code = _proxy("/predict/batch", method="POST", json=payload, params=params)
+    return jsonify(data), code
+
+
+@app.route("/proxy/symbols")
+def proxy_symbols():
+    data, code = _proxy("/symbols")
+    return jsonify(data), code
 
 
 if __name__ == "__main__":
