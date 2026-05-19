@@ -280,10 +280,10 @@ docker-compose up --build
 ```
 
 Services will be available at:
-- Flask UI: `http://localhost:5000`
-- FastAPI: `http://localhost:8000`
-- API Docs: `http://localhost:8000/docs`
-- Streamlit: `http://localhost:8501`
+- Flask UI: `http://43.205.113.174:5000`
+- FastAPI: `http://43.205.113.174:8000`
+- API Docs: `http://43.205.113.174:8000/docs`
+- Streamlit: `http://43.205.113.174:8501`
 
 ### 5. Run FastAPI standalone (no Docker)
 
