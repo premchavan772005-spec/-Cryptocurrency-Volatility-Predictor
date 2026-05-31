@@ -1,6 +1,10 @@
 # CryptoVol · Volatility Intelligence Platform
 
 > **Real-time cryptocurrency volatility prediction powered by Machine Learning.**
+> Fetches live OHLCV data, engineers 16 technical features, predicts annualised volatility
+> across 15 major cryptocurrencies — deployed on AWS EC2 with a three-tier Docker architecture.
+
+> **Real-time cryptocurrency volatility prediction powered by Machine Learning.**
 > Fetches live market data, engineers 16 technical features, and predicts future annualised volatility across 15 major cryptocurrencies — deployed on AWS EC2 with a three-tier Docker architecture.
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-43.205.113.174%3A5000-blue?style=flat-square)](http://43.205.113.174:5000)
