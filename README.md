@@ -1,3 +1,4 @@
+
 # CryptoVol · Volatility Intelligence Platform
 
 > **Real-time cryptocurrency volatility prediction powered by Machine Learning.**
@@ -7,12 +8,15 @@
 > **Real-time cryptocurrency volatility prediction powered by Machine Learning.**
 > Fetches live market data, engineers 16 technical features, and predicts future annualised volatility across 15 major cryptocurrencies — deployed on AWS EC2 with a three-tier Docker architecture.
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-43.205.113.174%3A5000-blue?style=flat-square)](http://43.205.113.174:5000)
-[![API Docs](https://img.shields.io/badge/API%20Docs-FastAPI%20Swagger-green?style=flat-square)](http://43.205.113.174:8000/docs)
-[![Python](https://img.shields.io/badge/Python-3.10-blue?style=flat-square&logo=python)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-teal?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com)
-[![Docker](https://img.shields.io/badge/Docker-Compose-blue?style=flat-square&logo=docker)](https://docker.com)
-[![AWS EC2](https://img.shields.io/badge/AWS-EC2%20Ubuntu%2026.04-orange?style=flat-square&logo=amazonaws)](https://aws.amazon.com)
+<div align="center">
+
+[![🌐 Live Demo](https://img.shields.io/badge/🌐_Live_Demo-Click_to_Open-blue?style=for-the-badge)](http://43.205.113.174:5000)
+[![⚡ FastAPI Backend](https://img.shields.io/badge/⚡_FastAPI_Backend-Port_8000-teal?style=for-the-badge)](http://43.205.113.174:8000)
+[![📖 API Docs](https://img.shields.io/badge/📖_API_Docs-Swagger_UI-green?style=for-the-badge)](http://43.205.113.174:8000/docs)
+[![📊 Streamlit App](https://img.shields.io/badge/📊_Streamlit_App-Port_8501-red?style=for-the-badge)](http://43.205.113.174:8501)
+[![💻 Source Code](https://img.shields.io/badge/💻_Source_Code-GitHub-black?style=for-the-badge&logo=github)](https://github.com/premchavan772005-spec/-Cryptocurrency-Volatility-Predictor)
+
+</div>
 
 ---
 
