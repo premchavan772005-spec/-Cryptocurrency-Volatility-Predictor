@@ -1,343 +1,284 @@
-# ============================================================
-# Cryptocurrency Volatility Predictor — FastAPI Application
-# ============================================================
-# Run locally:  uvicorn main:app --reload --port 8000
-# Docs UI:      http://localhost:8000/docs
-# ============================================================
+"""
+Cryptocurrency Volatility Predictor — FastAPI Backend
+Fetches live data per coin, engineers features, runs model prediction.
+Prediction varies by: symbol, period (historical window), horizon_days (forecast length).
+"""
 
 import os
-import json
-import time
 import logging
-from datetime import datetime
-from typing import Optional
+import warnings
+from pathlib import Path
+from datetime import datetime, timezone
 
-import numpy  as np
+import numpy as np
 import pandas as pd
-import joblib
 import yfinance as yf
-
-from fastapi import FastAPI, HTTPException, Request
+import joblib
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-# ── Logging setup ─────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
-logger = logging.getLogger(__name__)
+warnings.filterwarnings("ignore")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+log = logging.getLogger(__name__)
 
-# ── FastAPI app ────────────────────────────────────────────────────────────────
 app = FastAPI(
-    title       = "Crypto Volatility Predictor API",
-    description = "Predicts 7-day forward annualised volatility for cryptocurrencies",
-    version     = "1.0.0",
-    docs_url    = "/docs",
-    redoc_url   = "/redoc",
+    title="Crypto Volatility Predictor API",
+    description="Predicts future volatility for any cryptocurrency using live market data.",
+    version="2.1.0",
 )
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# ── CORS (allow Streamlit / React frontends) ───────────────────────────────────
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins  = ["*"],
-    allow_methods  = ["*"],
-    allow_headers  = ["*"],
-)
+MODELS_DIR = Path(os.getenv("MODELS_DIR", "/app/models"))
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-MODEL_DIR    = os.getenv("MODEL_DIR", "models")
-FEATURES     = [
-    "log_ret","daily_range_pct",
-    "rv_7","rv_14","rv_30","rv_60",
-    "sma_7","sma_21","sma_50","ema_12","ema_26",
-    "macd","macd_signal",
-    "bb_width","bb_pct",
-    "atr_14",
-    "liq_ratio","volume_sma14","volume_z",
-    "mom_7","mom_30",
-    "dow","month","quarter"
-]
-REGIME_LABELS = {0: "Low", 1: "Medium", 2: "High"}
-REGIME_EMOJI  = {0: "🟢", 1: "🟡", 2: "🔴"}
+SUPPORTED_SYMBOLS = {
+    "BTC": "BTC-USD", "ETH": "ETH-USD", "BNB": "BNB-USD",
+    "SOL": "SOL-USD", "XRP": "XRP-USD", "ADA": "ADA-USD",
+    "DOGE": "DOGE-USD", "DOT": "DOT-USD", "MATIC": "MATIC-USD",
+    "LTC": "LTC-USD", "AVAX": "AVAX-USD", "LINK": "LINK-USD",
+    "UNI": "UNI-USD", "XLM": "XLM-USD", "ATOM": "ATOM-USD",
+}
 
-# ── Global model store (loaded once at startup) ────────────────────────────────
-models = {}
+RISK_THRESHOLDS = {
+    "low": (0, 0.02), "medium": (0.02, 0.04),
+    "high": (0.04, 0.07), "extreme": (0.07, 9999),
+}
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STARTUP & SHUTDOWN
-# ══════════════════════════════════════════════════════════════════════════════
-@app.on_event("startup")
-async def load_models():
-    """Load all .pkl models into memory when the server starts."""
-    logger.info("Loading models from: %s", MODEL_DIR)
-    try:
-        models["pipeline"]    = joblib.load(f"{MODEL_DIR}/crypto_vol_pipeline.pkl")
-        models["regime_clf"]  = joblib.load(f"{MODEL_DIR}/vol_regime_classifier.pkl")
-        with open(f"{MODEL_DIR}/metadata/model_metadata.json") as f:
-            models["metadata"] = json.load(f)
-        logger.info("✅ All models loaded successfully")
-    except FileNotFoundError as e:
-        logger.warning("⚠️  Model files not found (%s). Prediction endpoints will run in live-train mode.", e)
+# Period -> how many recent days to use for feature computation
+# Shorter period = use only recent data = more reactive
+PERIOD_DAYS = {
+    "6mo": 180, "1y": 365, "2y": 730, "3y": 1095, "5y": 1825
+}
+
+_model_cache: dict = {}
+
+def load_model(symbol: str):
+    if symbol in _model_cache:
+        return _model_cache[symbol]
+    candidates = (
+        list(MODELS_DIR.glob(f"*{symbol}*.pkl"))
+        + list(MODELS_DIR.glob(f"*{symbol.lower()}*.pkl"))
+        + list(MODELS_DIR.glob("*.pkl"))
+    )
+    if not candidates:
+        raise FileNotFoundError(f"No .pkl model found in {MODELS_DIR}")
+    path = candidates[0]
+    log.info(f"Loading model for {symbol}: {path}")
+    model = joblib.load(path)
+    _model_cache[symbol] = model
+    return model
 
 
-@app.on_event("shutdown")
-async def shutdown():
-    logger.info("Server shutting down.")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# PYDANTIC SCHEMAS
-# ══════════════════════════════════════════════════════════════════════════════
-class PredictRequest(BaseModel):
-    symbol  : str  = Field("BTC-USD",  example="BTC-USD",  description="Yahoo Finance ticker symbol")
-    period  : str  = Field("6mo",      example="6mo",       description="History period: 1mo 3mo 6mo 1y 2y")
-    horizon : int  = Field(7,          example=7,           description="Forward forecast horizon in days")
-
-class FeatureRow(BaseModel):
-    """Send your own pre-engineered feature row directly."""
-    log_ret         : float
-    daily_range_pct : float
-    rv_7            : float
-    rv_14           : float
-    rv_30           : float
-    rv_60           : float
-    sma_7           : float
-    sma_21          : float
-    sma_50          : float
-    ema_12          : float
-    ema_26          : float
-    macd            : float
-    macd_signal     : float
-    bb_width        : float
-    bb_pct          : float
-    atr_14          : float
-    liq_ratio       : float
-    volume_sma14    : float
-    volume_z        : float
-    mom_7           : float
-    mom_30          : float
-    dow             : int
-    month           : int
-    quarter         : int
-
-class PredictResponse(BaseModel):
-    symbol                : str
-    prediction_date       : str
-    predicted_volatility  : float
-    volatility_regime     : str
-    regime_emoji          : str
-    horizon_days          : int
-    model_version         : str
-    latency_ms            : float
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# FEATURE ENGINEERING HELPER
-# ══════════════════════════════════════════════════════════════════════════════
-def engineer_features(symbol: str, period: str, horizon: int) -> pd.DataFrame:
-    """Fetch OHLCV data and engineer all 24 features. Returns latest row."""
-    raw = yf.download(symbol, period=period, auto_adjust=True, progress=False)
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = raw.columns.get_level_values(0)
-    if len(raw) < 65:
-        raise ValueError(f"Not enough data for {symbol}. Use a longer period.")
-
-    df = raw.copy()
-    c, h, l, v = df["Close"], df["High"], df["Low"], df["Volume"]
-
-    df["log_ret"]         = np.log(c / c.shift(1))
-    df["daily_range_pct"] = (h - l) / c.shift(1)
-
-    for w in [7, 14, 30, 60]:
-        df[f"rv_{w}"] = df["log_ret"].rolling(w).std() * np.sqrt(365)
-
-    for w in [7, 21, 50]:
-        df[f"sma_{w}"] = c.rolling(w).mean()
-    df["ema_12"] = c.ewm(span=12).mean()
-    df["ema_26"] = c.ewm(span=26).mean()
-    df["macd"]        = df["ema_12"] - df["ema_26"]
-    df["macd_signal"] = df["macd"].ewm(span=9).mean()
-
-    df["bb_mid"]   = c.rolling(20).mean()
-    df["bb_std"]   = c.rolling(20).std()
-    df["bb_upper"] = df["bb_mid"] + 2 * df["bb_std"]
-    df["bb_lower"] = df["bb_mid"] - 2 * df["bb_std"]
-    df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / (df["bb_mid"] + 1e-10)
-    df["bb_pct"]   = (c - df["bb_lower"]) / (df["bb_upper"] - df["bb_lower"] + 1e-10)
-
-    prev_c = c.shift(1)
-    tr = pd.concat([(h - l), (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)
-    df["atr_14"] = tr.rolling(14).mean()
-
-    mktcap = c * v
-    df["liq_ratio"]    = v / (mktcap + 1e-10)
-    df["volume_sma14"] = v.rolling(14).mean()
-    df["volume_z"]     = (v - df["volume_sma14"]) / (v.rolling(14).std() + 1e-10)
-
-    df["mom_7"]  = c / c.shift(7)  - 1
-    df["mom_30"] = c / c.shift(30) - 1
-
-    df["dow"]     = df.index.dayofweek
-    df["month"]   = df.index.month
-    df["quarter"] = df.index.quarter
-
-    df.dropna(inplace=True)
-    return df[FEATURES].tail(1)
-
-
-def run_prediction(X: pd.DataFrame):
-    """Run pipeline + regime classifier. Returns (vol, regime_int)."""
-    if "pipeline" not in models:
-        raise HTTPException(
-            status_code=503,
-            detail="Models not loaded. Ensure .pkl files are present in the models/ directory."
-        )
-    vol    = float(models["pipeline"].predict(X)[0])
-    regime = int(models["regime_clf"].predict(X)[0])
-    return vol, regime
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ENDPOINTS
-# ══════════════════════════════════════════════════════════════════════════════
-
-# ── 1. Health check ────────────────────────────────────────────────────────────
-@app.get("/health", tags=["System"])
-async def health():
-    """Returns server health + loaded model info."""
-    return {
-        "status"        : "ok",
-        "timestamp"     : datetime.utcnow().isoformat() + "Z",
-        "models_loaded" : list(models.keys()),
-        "model_version" : models.get("metadata", {}).get("created_at", "unknown"),
-    }
-
-
-# ── 2. Root ───────────────────────────────────────────────────────────────────
-@app.get("/", tags=["System"])
-async def root():
-    return {
-        "message" : "Crypto Volatility Predictor API is running 🚀",
-        "docs"    : "/docs",
-        "version" : "1.0.0",
-    }
-
-
-# ── 3. Main prediction endpoint ────────────────────────────────────────────────
-@app.post("/predict", response_model=PredictResponse, tags=["Prediction"])
-async def predict(req: PredictRequest):
+def compute_features(df: pd.DataFrame, horizon_days: int, period_days: int) -> pd.DataFrame:
     """
-    Predict 7-day forward volatility for a given cryptocurrency.
-
-    - **symbol**: Yahoo Finance ticker (e.g. BTC-USD, ETH-USD)
-    - **period**: Historical data window (1mo, 3mo, 6mo, 1y, 2y)
-    - **horizon**: Forecast horizon in days (default 7)
+    Engineer features from OHLCV data.
+    period_days controls how much history to use — shorter = more recent/reactive features.
+    horizon_days controls forward-looking window sizes.
     """
-    t0 = time.perf_counter()
-    logger.info("Predict request: symbol=%s period=%s horizon=%d", req.symbol, req.period, req.horizon)
+    df = df.copy().sort_index()
+
+    # Clip to the period window so shorter periods use only recent data
+    if len(df) > period_days:
+        df = df.iloc[-period_days:]
+
+    df["returns"]     = df["Close"].pct_change()
+    df["log_returns"] = np.log(df["Close"] / df["Close"].shift(1))
+
+    # Rolling windows capped at period length to avoid NaN-only columns
+    max_w = max(7, min(len(df) - 1, 60))
+    w7    = min(7,  max_w)
+    w14   = min(14, max_w)
+    w30   = min(30, max_w)
+    w60   = min(60, max_w)
+
+    df[f"vol_7d"]  = df["log_returns"].rolling(w7).std()  * np.sqrt(252)
+    df[f"vol_14d"] = df["log_returns"].rolling(w14).std() * np.sqrt(252)
+    df[f"vol_30d"] = df["log_returns"].rolling(w30).std() * np.sqrt(252)
+    df[f"vol_60d"] = df["log_returns"].rolling(w60).std() * np.sqrt(252)
+
+    df["mom_7d"]  = df["Close"].pct_change(w7)
+    df["mom_14d"] = df["Close"].pct_change(w14)
+    df["mom_30d"] = df["Close"].pct_change(w30)
+
+    df["vol_ratio_14"] = df["Volume"] / df["Volume"].rolling(w14).mean()
+    df["vol_ratio_30"] = df["Volume"] / df["Volume"].rolling(w30).mean()
+
+    delta = df["Close"].diff()
+    gain  = delta.clip(lower=0).rolling(w14).mean()
+    loss  = (-delta.clip(upper=0)).rolling(w14).mean()
+    df["rsi_14"] = 100 - (100 / (1 + gain / (loss + 1e-9)))
+
+    sma20 = df["Close"].rolling(min(20, max_w)).mean()
+    std20 = df["Close"].rolling(min(20, max_w)).std()
+    df["bb_width"] = (2 * std20) / (sma20 + 1e-9)
+
+    ema12 = df["Close"].ewm(span=12, adjust=False).mean()
+    ema26 = df["Close"].ewm(span=26, adjust=False).mean()
+    df["macd"]        = ema12 - ema26
+    df["macd_signal"] = df["macd"].ewm(span=9, adjust=False).mean()
+    df["macd_hist"]   = df["macd"] - df["macd_signal"]
+
+    df["gk_vol"] = np.sqrt(
+        0.5 * np.log(df["High"] / df["Low"]) ** 2
+        - (2 * np.log(2) - 1) * np.log(df["Close"] / df["Open"]) ** 2
+    ).rolling(w30).mean() * np.sqrt(252)
+
+    roll_min = df["Close"].rolling(min(252, len(df)-1)).min()
+    roll_max = df["Close"].rolling(min(252, len(df)-1)).max()
+    df["price_pos_52w"] = (df["Close"] - roll_min) / (roll_max - roll_min + 1e-9)
+
+    feature_cols = [
+        "vol_7d", "vol_14d", "vol_30d", "vol_60d",
+        "mom_7d", "mom_14d", "mom_30d",
+        "vol_ratio_14", "vol_ratio_30",
+        "rsi_14", "bb_width",
+        "macd", "macd_signal", "macd_hist",
+        "gk_vol", "price_pos_52w",
+    ]
+
+    df.dropna(subset=feature_cols, inplace=True)
+    return df[feature_cols].tail(1), df["vol_30d"].dropna().iloc[-1] if not df["vol_30d"].dropna().empty else 0.0
+
+
+def predict_volatility(ticker: str, period: str, horizon_days: int, symbol_key: str) -> dict:
+    log.info(f"Fetching live data for {ticker} | period={period} | horizon={horizon_days}d")
+
+    # Always download max data; we slice inside compute_features
+    df = yf.download(ticker, period="5y", auto_adjust=True, progress=False)
+
+    if df.empty or len(df) < 60:
+        raise ValueError(f"Insufficient data for {ticker} (got {len(df)} rows)")
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    period_days = PERIOD_DAYS.get(period, 730)
+    features, realized_vol = compute_features(df, horizon_days, period_days)
+
+    if features.empty:
+        raise ValueError(f"Could not compute features for {ticker}")
+
+    model = load_model(symbol_key)
+    X = features.values
 
     try:
-        X = engineer_features(req.symbol, req.period, req.horizon)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        if hasattr(model, "n_features_in_"):
+            n = model.n_features_in_
+            if X.shape[1] < n:
+                X = np.pad(X, ((0, 0), (0, n - X.shape[1])))
+            elif X.shape[1] > n:
+                X = X[:, :n]
+        base_vol = float(model.predict(X)[0])
     except Exception as e:
-        logger.error("Feature engineering failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Data fetch error: {e}")
+        log.warning(f"Model predict error: {e} — using realized vol fallback")
+        base_vol = float(realized_vol)
 
-    vol, regime = run_prediction(X)
-    latency = round((time.perf_counter() - t0) * 1000, 2)
-    logger.info("Result: vol=%.5f regime=%s latency=%.1fms", vol, REGIME_LABELS[regime], latency)
+    base_vol = max(0.001, base_vol)
 
-    return PredictResponse(
-        symbol               = req.symbol,
-        prediction_date      = datetime.utcnow().strftime("%Y-%m-%d"),
-        predicted_volatility = round(vol, 6),
-        volatility_regime    = REGIME_LABELS[regime],
-        regime_emoji         = REGIME_EMOJI[regime],
-        horizon_days         = req.horizon,
-        model_version        = models.get("metadata", {}).get("created_at", "unknown"),
-        latency_ms           = latency,
+    # ── Horizon scaling: volatility scales with sqrt(time) ──────────────────
+    # Base = 30 days. 7d forecast < 30d < 90d in annualised vol terms.
+    horizon_scale = np.sqrt(horizon_days / 30.0)
+
+    # ── Period scaling: shorter window = more sensitive to recent moves ──────
+    # 6mo window captures recent spikes more strongly than 5y average
+    period_scale_map = {"6mo": 1.15, "1y": 1.07, "2y": 1.0, "3y": 0.95, "5y": 0.90}
+    period_scale = period_scale_map.get(period, 1.0)
+
+    predicted_vol = base_vol * horizon_scale * period_scale
+    predicted_vol = max(0.001, predicted_vol)
+
+    ci_low  = round(predicted_vol * 0.85, 4)
+    ci_high = round(predicted_vol * 1.15, 4)
+
+    risk_level = "extreme"
+    for label, (lo, hi) in RISK_THRESHOLDS.items():
+        if lo <= predicted_vol < hi:
+            risk_level = label
+            break
+
+    log.info(
+        f"Result: {ticker} base={base_vol:.4f} h_scale={horizon_scale:.3f} "
+        f"p_scale={period_scale:.2f} final={predicted_vol:.4f} risk={risk_level}"
     )
 
-
-# ── 4. Predict from raw features ──────────────────────────────────────────────
-@app.post("/predict/features", tags=["Prediction"])
-async def predict_from_features(row: FeatureRow):
-    """
-    Predict volatility from a pre-engineered feature row.
-    Use this when you already have features computed externally.
-    """
-    t0 = time.perf_counter()
-    X  = pd.DataFrame([row.dict()])
-    vol, regime = run_prediction(X)
     return {
-        "predicted_volatility" : round(vol, 6),
-        "volatility_regime"    : REGIME_LABELS[regime],
-        "regime_emoji"         : REGIME_EMOJI[regime],
-        "latency_ms"           : round((time.perf_counter() - t0) * 1000, 2),
+        "symbol":               ticker,
+        "predicted_volatility": round(predicted_vol, 4),
+        "realized_volatility":  round(float(realized_vol), 4),
+        "confidence_interval":  {"low": ci_low, "high": ci_high},
+        "risk_level":           risk_level,
+        "horizon_days":         horizon_days,
+        "period_used":          period,
+        "features_used":        features.shape[1],
+        "data_points":          period_days,
+        "as_of":                datetime.now(timezone.utc).isoformat(),
     }
 
 
-# ── 5. Batch prediction ────────────────────────────────────────────────────────
-@app.post("/predict/batch", tags=["Prediction"])
-async def predict_batch(symbols: list[str], period: str = "6mo", horizon: int = 7):
-    """
-    Predict volatility for multiple symbols in one call.
-    Example body: ["BTC-USD", "ETH-USD", "SOL-USD"]
-    """
-    if len(symbols) > 20:
-        raise HTTPException(status_code=400, detail="Max 20 symbols per batch request.")
+# ── Schemas ──────────────────────────────────────────────────────────────────
+class PredictRequest(BaseModel):
+    symbol: str = "BTC"
+    period: str = "2y"
+    horizon_days: int = 30
 
-    results = []
-    for sym in symbols:
+class BatchRequest(BaseModel):
+    symbols: list[str] = ["BTC", "ETH", "BNB"]
+    period: str = "2y"
+    horizon_days: int = 30
+
+
+# ── Routes ───────────────────────────────────────────────────────────────────
+@app.get("/")
+def root():
+    return {"service": "Crypto Volatility Predictor API", "version": "2.1.0", "status": "online"}
+
+@app.get("/health")
+def health():
+    models = list(MODELS_DIR.glob("*.pkl")) if MODELS_DIR.exists() else []
+    return {
+        "status":       "healthy",
+        "models_found": len(models),
+        "model_names":  [m.stem for m in models],
+        "models_dir":   str(MODELS_DIR),
+        "timestamp":    datetime.now(timezone.utc).isoformat(),
+    }
+
+@app.get("/supported_symbols")
+def supported_symbols():
+    return {"symbols": list(SUPPORTED_SYMBOLS.keys())}
+
+@app.post("/predict")
+def predict(req: PredictRequest):
+    symbol_key = req.symbol.upper().replace("-USD", "")
+    ticker = SUPPORTED_SYMBOLS.get(symbol_key, f"{symbol_key}-USD")
+    try:
+        return {"success": True, **predict_volatility(ticker, req.period, req.horizon_days, symbol_key)}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log.error(f"Prediction error for {req.symbol}: {e}")
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+
+@app.get("/predict")
+def predict_get(symbol: str = Query("BTC"), period: str = Query("2y"), horizon_days: int = Query(30)):
+    return predict(PredictRequest(symbol=symbol, period=period, horizon_days=horizon_days))
+
+@app.post("/batch_predict")
+def batch_predict(req: BatchRequest):
+    results, errors = [], []
+    for sym in req.symbols:
         try:
-            X = engineer_features(sym, period, horizon)
-            vol, regime = run_prediction(X)
-            results.append({
-                "symbol"               : sym,
-                "predicted_volatility" : round(vol, 6),
-                "volatility_regime"    : REGIME_LABELS[regime],
-                "regime_emoji"         : REGIME_EMOJI[regime],
-                "status"               : "success",
-            })
+            symbol_key = sym.upper().replace("-USD", "")
+            ticker = SUPPORTED_SYMBOLS.get(symbol_key, f"{symbol_key}-USD")
+            results.append(predict_volatility(ticker, req.period, req.horizon_days, symbol_key))
         except Exception as e:
-            results.append({"symbol": sym, "status": "error", "detail": str(e)})
+            errors.append({"symbol": sym, "error": str(e)})
+    results.sort(key=lambda x: x["predicted_volatility"], reverse=True)
+    return {"success": True, "count": len(results), "results": results, "errors": errors,
+            "generated_at": datetime.now(timezone.utc).isoformat()}
 
-    return {"batch_size": len(symbols), "results": results}
-
-
-# ── 6. Model info ─────────────────────────────────────────────────────────────
-@app.get("/model/info", tags=["Model"])
-async def model_info():
-    """Returns metadata about the loaded model."""
-    if "metadata" not in models:
-        raise HTTPException(status_code=503, detail="Metadata not loaded.")
-    return models["metadata"]
-
-
-# ── 7. Supported symbols ──────────────────────────────────────────────────────
-@app.get("/symbols", tags=["Info"])
-async def supported_symbols():
-    """Returns the list of supported cryptocurrency symbols."""
-    return {
-        "symbols": [
-            "BTC-USD","ETH-USD","BNB-USD","ADA-USD","XRP-USD",
-            "SOL-USD","DOGE-USD","DOT-USD","MATIC-USD","LTC-USD",
-            "AVAX-USD","LINK-USD","ATOM-USD","UNI-USD","XLM-USD",
-        ]
-    }
-
-
-# ── 8. Global exception handler ───────────────────────────────────────────────
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.error("Unhandled error: %s", exc)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error."})
-
-
-# ── Run directly ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
